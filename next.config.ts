@@ -2,7 +2,7 @@ import type { NextConfig } from 'next';
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-// Build information: from CI, or git commit hash
+// // Build information: from CI, or git commit hash
 let buildHash = process.env.NEXT_PUBLIC_BUILD_HASH || process.env.GITHUB_SHA || process.env.VERCEL_GIT_COMMIT_SHA; // Docker or custom, GitHub Actions, Vercel
 try {
   // fallback to local git commit hash
