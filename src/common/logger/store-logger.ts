@@ -13,6 +13,7 @@ import type { LogEntry } from './logger.types';
 // configuration
 const DEFAULT_MAX_ENTRIES = 500;
 const DEFAULT_MAX_PERSISTED = 100;
+const DEFAULT_MAX_PERSISTED_DETAILS_LEN = 500;
 const DEBUG_NEW_LOG = Release.IsNodeDevBuild;
 
 
@@ -106,7 +107,9 @@ export const useLoggerStore = create<LoggerState & LoggerActions>()(
             }[updatedEntry.level] || console.log;
             // NOTE: we don't show repetition count in the console, to let the browser perform its own deduplication
             // consoleMethod(`[${updatedEntry.source || 'client'}] ${updatedEntry.message} (repeated ${updatedEntry.repetitionCount} times)`, updatedEntry.details || '', updatedEntry.actions ? '(Actionable)' : '');
-            consoleMethod(`[${updatedEntry.source || 'client'}] ${updatedEntry.message}`, updatedEntry.details || '', updatedEntry.actions ? '(Actionable)' : '');
+            const consoleMessage = `[${updatedEntry.source || 'client'}] ${updatedEntry.message}${updatedEntry.actions ? ' (Actionable)' : ''}`;
+            if (updatedEntry.details) consoleMethod(consoleMessage, updatedEntry.details);
+            else consoleMethod(consoleMessage);
           }
 
           return lastEntry.id;
@@ -136,7 +139,9 @@ export const useLoggerStore = create<LoggerState & LoggerActions>()(
             info: console.info, warn: console.warn,
             error: console.error, critical: console.error,
           }[newEntry.level] || console.log;
-          consoleMethod(`[${newEntry.source || 'client'}] ${newEntry.message}`, newEntry.details || '', newEntry.actions ? '(Actionable)' : '');
+          const consoleMessage = `[${newEntry.source || 'client'}] ${newEntry.message}${newEntry.actions ? ' (Actionable)' : ''}`;
+          if (newEntry.details) consoleMethod(consoleMessage, newEntry.details);
+          else consoleMethod(consoleMessage);
         }
 
         return id;
@@ -214,6 +219,16 @@ export const useLoggerStore = create<LoggerState & LoggerActions>()(
           .map(e => {
             // remove any actions
             const { actions, hasPendingActions, ...rest } = e;
+            // Truncate details if too large
+            if (rest.details) {
+              const detailsStr = JSON.stringify(rest.details);
+              if (detailsStr.length > 1000) {
+                rest.details = {
+                  truncated: true,
+                  preview: detailsStr.substring(0, DEFAULT_MAX_PERSISTED_DETAILS_LEN) + '...',
+                };
+              }
+            }
             return rest;
           }),
       }),
