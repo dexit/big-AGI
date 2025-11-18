@@ -2,10 +2,10 @@ import * as z from 'zod/v4';
 
 import type { AixAPIChatGenerate_Request } from '~/modules/aix/server/api/aix.wiretypes';
 import { aixCGR_ChatSequence_FromDMessagesOrThrow, aixCGR_SystemMessageText } from '~/modules/aix/client/aix.client.chatGenerateRequest';
-import { aixChatGenerateContent_DMessage, aixCreateChatGenerateContext } from '~/modules/aix/client/aix.client';
+import { aixChatGenerateContent_DMessage_orThrow, aixCreateChatGenerateContext } from '~/modules/aix/client/aix.client';
 import { aixFunctionCallTool, aixRequireSingleFunctionCallInvocation } from '~/modules/aix/client/aix.client.fromSimpleFunction';
 
-import { createTextContentFragment, DMessageAttachmentFragment, isImageRefPart } from '~/common/stores/chat/chat.fragments';
+import { createTextContentFragment, DMessageAttachmentFragment, isImageRefPart, isZyncAssetImageReferencePart } from '~/common/stores/chat/chat.fragments';
 import { getDomainModelIdOrThrow } from '~/common/stores/llms/store-llms';
 
 
@@ -19,7 +19,9 @@ export async function agiAttachmentPrompts(attachmentFragments: DMessageAttachme
     return [];
 
   // require llm
-  const requireVision = attachmentFragments.some(f => isImageRefPart(f.part));
+  const requireVision = attachmentFragments.some(f =>
+    isZyncAssetImageReferencePart(f.part) || isImageRefPart(f.part)
+  );
   const llmId = getDomainModelIdOrThrow(['fastUtil', 'primaryChat'], true, requireVision, 'guess-attachments-prompts');
 
   const num_suggestions = 3;
@@ -65,7 +67,7 @@ Analyze the provided content to determine its nature, identify any relationships
     toolsPolicy: { type: 'any' },
   } as const;
 
-  const { fragments } = await aixChatGenerateContent_DMessage(
+  const { fragments } = await aixChatGenerateContent_DMessage_orThrow(
     llmId,
     aixChatGenerate,
     aixCreateChatGenerateContext('chat-attachment-prompts', attachmentFragments[0].fId),

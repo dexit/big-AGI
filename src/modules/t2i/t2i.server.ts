@@ -1,6 +1,15 @@
 import * as z from 'zod/v4';
 
 
+// Image generation options
+
+export interface T2iGenerateOptions {
+  /** When true, optimize for profile picture generation (lower cost, quality, smaller size) */
+  agiProfilePic?: true;
+  /** Abort signal for cancellation */
+  abortSignal?: AbortSignal;
+}
+
 // Image generation output
 
 export type T2ICreateImageAsyncStreamOp =
@@ -58,7 +67,6 @@ export function getImageInformationFromBytes(arrayBuffer: ArrayBuffer): { width:
 
 /**
  * Low-level function to extract the dimensions of a PNG image from its bytes.
- * Used by Prodia to qualify the generated PNG.
  */
 export function getPngDimensionsFromBytes(arrayBuffer: ArrayBuffer) {
   const dataView = new DataView(arrayBuffer);

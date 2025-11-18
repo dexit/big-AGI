@@ -32,6 +32,7 @@ function _getPosthogServer(): PostHog | null {
 export async function posthogCaptureServerException(
   error: Error | unknown,
   context: {
+    domain: string; // e.g. 'trpc', which will become 'server-trpc'
     runtime: 'edge' | 'nodejs';
     endpoint: string;
     method?: string;
@@ -48,11 +49,9 @@ export async function posthogCaptureServerException(
 
     // Use the immediate variant for better performance in serverless environments
     await client.captureExceptionImmediate(error, distinctId, {
-      // Error source identification
-      $exception_source: 'server',
-      $exception_runtime: context.runtime,
+      agi_domain: `server-${context.domain}`,
+      agi_runtime: context.runtime,
       // Context properties
-      runtime: context.runtime,
       endpoint: context.endpoint,
       method: context.method,
       url: context.url,

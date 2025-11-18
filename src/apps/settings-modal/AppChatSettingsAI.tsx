@@ -13,6 +13,7 @@ import { useLLMSelect } from '~/common/components/forms/useLLMSelect';
 import { useLabsDevMode } from '~/common/stores/store-ux-labs';
 import { useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
 
+import type { TokenCountingMethod } from '../chat/store-app-chat';
 import { useChatAutoAI } from '../chat/store-app-chat';
 
 
@@ -26,6 +27,19 @@ const _keepThinkingBlocksOptions: FormSelectOption<'all' | 'last-only'>[] = [
     value: 'all',
     label: 'Preserve All',
     description: 'Keep all traces',
+  },
+] as const;
+
+const _tokenCountingMethodOptions: FormSelectOption<TokenCountingMethod>[] = [
+  {
+    value: 'approximate',
+    label: 'Fast',
+    description: 'Lightweight: ~90% approximation',
+  },
+  {
+    value: 'accurate',
+    label: 'Precise',
+    description: 'Accurate tokenizer, heavier',
   },
 ] as const;
 
@@ -63,6 +77,7 @@ export function AppChatSettingsAI() {
     // autoSuggestQuestions, setAutoSuggestQuestions,
     autoTitleChat, setAutoTitleChat,
     chatKeepLastThinkingOnly, setChatKeepLastThinkingOnly,
+    tokenCountingMethod, setTokenCountingMethod,
   } = useChatAutoAI();
 
   const labsDevMode = useLabsDevMode();
@@ -114,14 +129,29 @@ export function AppChatSettingsAI() {
       </>}
     />
 
+    <FormControlDomainModel
+      domainId='imageCaption'
+      title='Vision model'
+      description='Image captioning'
+      tooltip='Vision model used to generate text descriptions of images when the Caption (Text) attachment option is selected.'
+    />
+
     {labsDevMode && (
       <FormControlDomainModel
         domainId='primaryChat'
         title={<><EngineeringIcon color='warning' sx={{ fontSize: 'lg', mr: 0.5, mb: 0.25 }} />Last used model</>}
         description='Chat fallback model'
-        tooltip='The last used chat model, used as default for new conversations. This is a develoment setting used to test out auto-detection of the most fitting initial chat model.'
+        tooltip='The last used chat model, used as default for new conversations. This is a development setting used to test out auto-detection of the most fitting initial chat model.'
       />
     )}
+
+    <FormSelectControl
+      title='Token Counting'
+      tooltip='Controls how tokens are counted for context limits and pricing estimates.'
+      options={_tokenCountingMethodOptions}
+      value={tokenCountingMethod}
+      onChange={setTokenCountingMethod}
+    />
 
     <FormSelectControl
       title='Reasoning traces'
@@ -129,7 +159,6 @@ export function AppChatSettingsAI() {
       options={_keepThinkingBlocksOptions}
       value={chatKeepLastThinkingOnly ? 'last-only' : 'all'}
       onChange={(value) => setChatKeepLastThinkingOnly(value === 'last-only')}
-      selectSx={{ minWidth: 140 }}
     />
 
     <ListDivider inset='gutter'>Automatic AI Functions</ListDivider>

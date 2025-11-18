@@ -6,6 +6,7 @@ import { GoodModal } from '~/common/components/modals/GoodModal';
 import { platformAwareKeystrokes } from '~/common/components/KeyStroke';
 import { useIsMobile } from '~/common/components/useMatchMedia';
 import { useUIContentScaling } from '~/common/stores/store-ui';
+import { Box } from '@mui/joy';
 
 
 const shortcutsMd = platformAwareKeystrokes(`
@@ -37,6 +38,7 @@ const shortcutsMd = platformAwareKeystrokes(`
 | Ctrl + ,         | ⚙️ Preferences                          |
 | Ctrl + Shift + M | 🧠 Models                               |
 | Ctrl + Shift + O | 💬 Options (current Chat Model)         |
+| Ctrl + Shift + A | Toggle AI Request Inspector             |
 | Ctrl + Shift + + | Increase Text Size                      |
 | Ctrl + Shift + - | Decrease Text Size                      |
 | Ctrl + Shift + / | Shortcuts                               |
@@ -51,12 +53,14 @@ export function ShortcutsModal(props: { onClose: () => void }) {
   const contentScaling = useUIContentScaling();
 
   return (
-    <GoodModal open title='Desktop Shortcuts' onClose={props.onClose}>
-      <ScaledTextBlockRenderer
-        text={shortcutsMd}
-        contentScaling={contentScaling}
-        textRenderVariant='markdown'
-      />
+    <GoodModal open fullscreen={isMobile} title='Desktop Shortcuts' onClose={props.onClose}>
+      <Box sx={{ mx: -2 }}>
+        <ScaledTextBlockRenderer
+          text={shortcutsMd}
+          contentScaling={contentScaling}
+          textRenderVariant='markdown'
+        />
+      </Box>
     </GoodModal>
   );
 }

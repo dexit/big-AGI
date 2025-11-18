@@ -2,8 +2,8 @@ import type { StateCreator } from 'zustand/vanilla';
 
 import type { ModelVendorId } from '~/modules/llms/vendors/vendors.registry';
 
-import type { DLLM, DLLMId } from './llms.types';
 import type { DModelDomainId } from './model.domains.types';
+import { DLLM, DLLMId, getLLMPricing, isLLMHidden, isLLMVisible } from './llms.types';
 import { LlmsRootState, useModelsStore } from './store-llms';
 import { ModelDomainsList, ModelDomainsRegistry } from './model.domains.registry';
 import { createDModelConfiguration, DModelConfiguration } from './modelconfiguration.types';
@@ -63,7 +63,7 @@ export const createLlmsAssignmentsSlice: StateCreator<LlmsRootState & LlmsAssign
       return {
         modelAssignments: {
           ...state.modelAssignments,
-          [domainId]: createDModelConfiguration(domainId, llmId),
+          [domainId]: createDModelConfiguration(domainId, llmId, undefined),
         },
       };
     }),
@@ -83,7 +83,7 @@ export const createLlmsAssignmentsSlice: StateCreator<LlmsRootState & LlmsAssign
         if (llm) {
           if (!ifNotVisible)
             return; // present and maybe visible: nothing to do
-          if (!llm.hidden)
+          if (isLLMVisible(llm))
             return; // present and visible: nothing to do
         }
       }
@@ -208,13 +208,13 @@ function _autoModelConfiguration(domainId: DModelDomainId, llms: ReadonlyArray<D
     case 'topVendorTopLlm':
       const topRankedLLMId = _strategyTopQuality(vendors);
       if (topRankedLLMId)
-        return createDModelConfiguration(domainId, topRankedLLMId);
+        return createDModelConfiguration(domainId, topRankedLLMId, undefined);
       break;
 
     case 'topVendorLowestCost':
       const lowCostLLMId = _strategyTopVendorLowestCost(vendors);
       if (lowCostLLMId)
-        return createDModelConfiguration(domainId, lowCostLLMId);
+        return createDModelConfiguration(domainId, lowCostLLMId, undefined);
       break;
 
     default:
@@ -270,12 +270,12 @@ function _strategyTopVendorLowestCost(vendors: PreferredRankedVendors, requireEl
 function _groupLlmsByVendorRankedByElo(llms: ReadonlyArray<DLLM>): PreferredRankedVendors {
   // group all LLMs by vendor
   const grouped = llms.reduce((acc, llm) => {
-    if (llm.hidden) return acc;
+    if (isLLMHidden(llm)) return acc;
     const group = acc.find(v => v.vendorId === llm.vId);
     const eloCostItem = {
       id: llm.id,
       cbaElo: llm.benchmark?.cbaElo,
-      costRank: !llm.pricing ? undefined : _getLlmCostBenchmark(llm),
+      costRank: !getLLMPricing(llm) ? undefined : _getLlmCostBenchmark(llm),
     };
     if (!group)
       acc.push({ vendorId: llm.vId, llmsByElo: [eloCostItem] });
@@ -295,8 +295,9 @@ function _groupLlmsByVendorRankedByElo(llms: ReadonlyArray<DLLM>): PreferredRank
 
 // Hypothetical cost benchmark for a model, based on total cost of 100k input tokens and 10k output tokens.
 function _getLlmCostBenchmark(llm: DLLM): number | undefined {
-  if (!llm.pricing?.chat) return undefined;
-  const costIn = getLlmCostForTokens(100000, 100000, llm.pricing.chat.input);
-  const costOut = getLlmCostForTokens(100000, 10000, llm.pricing.chat.output);
+  const pricing = getLLMPricing(llm);
+  if (!pricing?.chat) return undefined;
+  const costIn = getLlmCostForTokens(100000, 100000, pricing.chat.input);
+  const costOut = getLlmCostForTokens(100000, 10000, pricing.chat.output);
   return (costIn !== undefined && costOut !== undefined) ? costIn + costOut : undefined;
 }

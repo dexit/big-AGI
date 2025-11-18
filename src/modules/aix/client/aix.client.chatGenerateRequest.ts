@@ -1,8 +1,9 @@
+import type { Immutable } from '~/common/types/immutable.types';
 import { getImageAsset } from '~/common/stores/blob/dblobs-portability';
 
 import { DLLM, LLM_IF_HOTFIX_NoStream, LLM_IF_HOTFIX_StripImages, LLM_IF_HOTFIX_StripSys0, LLM_IF_HOTFIX_Sys0ToUsr0 } from '~/common/stores/llms/llms.types';
 import { DMessage, DMessageRole, DMetaReferenceItem, MESSAGE_FLAG_AIX_SKIP, MESSAGE_FLAG_VND_ANT_CACHE_AUTO, MESSAGE_FLAG_VND_ANT_CACHE_USER, messageHasUserFlag } from '~/common/stores/chat/chat.message';
-import { DMessageFragment, DMessageImageRefPart, isAttachmentFragment, isContentOrAttachmentFragment, isDocPart, isTextContentFragment, isToolResponseFunctionCallPart, isVoidThinkingFragment } from '~/common/stores/chat/chat.fragments';
+import { DMessageFragment, DMessageImageRefPart, DMessageZyncAssetReferencePart, isContentOrAttachmentFragment, isToolResponseFunctionCallPart, isVoidThinkingFragment } from '~/common/stores/chat/chat.fragments';
 import { Is } from '~/common/util/pwaUtils';
 import { convert_Base64WithMimeType_To_Blob, convert_Blob_To_Base64 } from '~/common/util/blobUtils';
 import { imageBlobResizeIfNeeded, LLMImageResizeMode } from '~/common/util/imageUtils';
@@ -17,6 +18,7 @@ import type { AixAPIChatGenerate_Request, AixMessages_ModelMessage, AixMessages_
 const MODEL_IMAGE_RESCALE_MIMETYPE = !Is.Browser.Safari ? 'image/webp' : 'image/jpeg';
 const MODEL_IMAGE_RESCALE_QUALITY = 0.90;
 const IGNORE_CGR_NO_IMAGE_DEREFERENCE = true; // set to false to raise an exception, otherwise the CGR will continue skipping the part
+const AUTO_SYSTEM_IMAGES_INDEX = true; // set to false to disable the small index of images (in system instruction)
 
 
 // AIX <> Simple Text API helpers
@@ -78,16 +80,171 @@ export async function aixCGR_SystemMessage_FromDMessageOrThrow(
     parts: [],
   };
 
+  // collect image description texts during conversion
+  const imageDescriptionTexts: string[] = [];
+
   // process fragments of the system instruction
-  for (const fragment of systemInstruction.fragments) {
-    if (isTextContentFragment(fragment)) {
-      sm.parts.push(fragment.part);
-    } else if (isAttachmentFragment(fragment) && isDocPart(fragment.part)) {
-      sm.parts.push(fragment.part);
-    } else {
-      if (process.env.NODE_ENV === 'development')
-        throw new Error('[DEV] aixCGR_systemMessageFromInstruction: unexpected system fragment');
-      console.warn('[DEV] aixCGR_systemMessageFromInstruction: unexpected system fragment:', fragment);
+  for (const sFragment of systemInstruction.fragments) {
+    switch (sFragment.ft) {
+
+      // Content Fragments - system has [ Text: the good old system instruction ]
+      case 'content':
+        switch (sFragment.part.pt) {
+          // text parts are copied as-is
+          case 'text':
+            sm.parts.push(sFragment.part);
+            break;
+
+          default:
+            const _exhaustiveCheck: never = sFragment.part;
+          // noinspection FallThroughInSwitchStatementJS
+          case 'reference':
+          case 'image_ref':
+          case 'tool_invocation':
+          case 'tool_response':
+          case 'error':
+          case '_pt_sentinel':
+            console.warn('[DEV] aixCGR_systemMessageFromInstruction: unexpected System Content fragment', { sFragment });
+            break;
+        }
+        break;
+
+      // Attachment Fragments - system has [ Doc: document attachments, such as files, etf., Reference: to Zync parts, including Image which is the only one supported, ... ]
+      case 'attachment':
+        switch (sFragment.part.pt) {
+          // doc parts are copied as-is
+          case 'doc':
+            sm.parts.push(sFragment.part);
+            break;
+
+          // reference: image parts are supported
+          case 'reference':
+            const refPart = sFragment.part;
+            const refPartRt = refPart.rt;
+            switch (refPartRt) {
+              case 'zync':
+                const zt = refPart.zType;
+                switch (zt) {
+                  case 'asset':
+                    const at = refPart.assetType;
+                    switch (at) {
+                      case 'audio':
+                        // dereference the Zync Audio Asset, converting it to an inline buffer
+                        throw '[DEV] audio assets from the user are not supported yet';
+
+                      case 'image':
+                        // dereference the Zync Image Asset, converting it to an inline image
+                        const resizeMode = false; // keep the image as-is, do not diminish quality; as any resize was done at the Persona edit time
+                        try {
+                          sm.parts.push(await aixConvertZyncImageAssetRefToInlineImageOrThrow(refPart, resizeMode));
+
+                          // NOTE: we SHALL make this more generic, but it's okay for the time being
+                          if (AUTO_SYSTEM_IMAGES_INDEX) {
+                            // Generate description text using pure function
+                            const title = sFragment?.ft === 'attachment' ? sFragment.title : undefined;
+                            // const caption = sFragment?.ft === 'attachment' ? sFragment.caption : undefined;
+                            const altText = refPart.zRefSummary?.text || refPart._legacyImageRefPart?.altText;
+                            let width = refPart._legacyImageRefPart?.width;
+                            let height = refPart._legacyImageRefPart?.height;
+                            let prompt: string | undefined;
+                            let author: string | undefined;
+
+                            // Try to get additional metadata from the image asset
+                            try {
+                              if (refPart._legacyImageRefPart) {
+                                const dataRef = refPart._legacyImageRefPart.dataRef;
+                                if (dataRef.reftype === 'dblob' && 'dblobAssetId' in dataRef) {
+                                  const imageAsset = await getImageAsset(dataRef.dblobAssetId);
+                                  if (imageAsset) {
+                                    width = imageAsset.metadata.width;
+                                    height = imageAsset.metadata.height;
+                                    author = imageAsset.metadata.author;
+                                    // Extract info from origin
+                                    if (imageAsset.origin.ot === 'generated') {
+                                      prompt = imageAsset.origin.prompt;
+                                      author = imageAsset.origin.generatorName;
+                                    }
+                                  }
+                                }
+                              }
+                            } catch {
+                              // Continue without additional metadata if asset fetch fails
+                            }
+
+                            // Build description text inline
+                            const parts: string[] = [];
+                            parts.push(title || 'Image');
+                            if (width && height) parts.push(`(${width}×${height})`);
+                            if (altText && altText !== title) parts.push(`- ${altText}`);
+                            if (prompt) {
+                              parts.push(`- Generated from: "${prompt}"`);
+                              if (author) parts.push(`by ${author}`);
+                            } else if (author) parts.push(`- Author: ${author}`);
+                            // if (caption && caption !== altText) parts.push(`- ${caption}`);
+                            const descriptionText = parts.join(' ');
+                            imageDescriptionTexts.push(descriptionText);
+                          }
+
+                        } catch (error: any) {
+                          if (IGNORE_CGR_NO_IMAGE_DEREFERENCE)
+                            console.warn(`Zync asset reference from the system instruction missing in the chat generation request because: ${error?.message || error?.toString() || 'Unknown error'} - continuing without`);
+                          else throw error;
+                        }
+                        break;
+
+                      default:
+                        const _exhaustiveCheck: never = at;
+                        console.warn('[DEV] aixCGR_systemMessageFromInstruction: unexpected System Reference fragment Asset type', at);
+                        break;
+                    }
+                    break;
+
+                  default:
+                    const _exhaustiveCheck: never = zt;
+                    break;
+                }
+                break;
+
+              default:
+                const _exhaustiveCheck: never = refPartRt;
+              // noinspection FallThroughInSwitchStatementJS
+              case '_sentinel':
+                console.warn('[DEV] aixCGR_systemMessageFromInstruction: unexpected System Reference fragment', { sFragment });
+                break;
+            }
+            break;
+
+          default:
+            const _exhaustiveCheck: never = sFragment.part;
+          // noinspection FallThroughInSwitchStatementJS
+          case 'image_ref':
+          case '_pt_sentinel':
+            console.warn('[DEV] aixCGR_systemMessageFromInstruction: unexpected System Attachment fragment', { sFragment });
+            break;
+        }
+        break;
+
+      default:
+        const _exhaustiveCheck: never = sFragment;
+      // noinspection FallThroughInSwitchStatementJS
+      case 'void':
+      case '_ft_sentinel':
+        console.warn('[DEV] aixCGR_systemMessageFromInstruction: unexpected System Fragment type', { sFragment });
+        break;
+    }
+  }
+
+  // Add rich image descriptions if there are images that will be spilled over
+  if (AUTO_SYSTEM_IMAGES_INDEX && imageDescriptionTexts.length > 0) {
+    const firstImageIndex = sm.parts.findIndex(part => part.pt === 'inline_image');
+    if (firstImageIndex >= 0) {
+      const enHeading = imageDescriptionTexts.length === 1
+        ? 'Note: There is 1 image attached to this system instruction that will appear in the following user message:'
+        : `Note: There are ${imageDescriptionTexts.length} images attached to this system instruction that will appear in the following user message:`;
+      const indexText = [enHeading, ...imageDescriptionTexts].join('\n - ');
+
+      // Insert the descriptive text before the first image
+      sm.parts.splice(firstImageIndex, 0, { pt: 'text', text: indexText });
     }
   }
 
@@ -136,6 +293,55 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
         switch (uFragment.part.pt) {
           case 'text':
             uMsg.parts.push(uFragment.part);
+            break;
+
+          case 'reference':
+            const refPart = uFragment.part;
+            const refPartRt = refPart.rt;
+            switch (refPartRt) {
+
+              case 'zync':
+                const zt = refPart.zType;
+                switch (zt) {
+
+                  case 'asset':
+                    const at = refPart.assetType;
+                    switch (at) {
+
+                      case 'image':
+                        // dereference the Zync Image Asset, converting it to an inline image
+                        try {
+                          uMsg.parts.push(await aixConvertZyncImageAssetRefToInlineImageOrThrow(refPart, false));
+                        } catch (error: any) {
+                          if (IGNORE_CGR_NO_IMAGE_DEREFERENCE) console.warn(`Zync asset reference from the user missing in the chat generation request because: ${error?.message || error?.toString() || 'Unknown error'} - continuing without`);
+                          else throw error;
+                        }
+                        break;
+
+                      case 'audio':
+                        // dereference the Zync Audio Asset, converting it to an inline buffer
+                        throw '[DEV] audio assets from the user are not supported yet';
+
+                      default:
+                        const _exhaustiveCheck: never = at;
+                        console.warn('aixCGR_FromDMessages: unexpected Zync asset type from the user', at);
+                        break;
+                    }
+                    break;
+
+                  default:
+                    const _exhaustiveCheck: never = zt;
+                    break;
+                }
+                break;
+
+              case '_sentinel':
+                break; // not a real case
+
+              default:
+                const _exhaustiveCheck: never = refPartRt;
+                console.warn('aixCGR_FromDMessages: unexpected User fragment part type', refPartRt);
+            }
             break;
 
           case 'image_ref':
@@ -221,6 +427,57 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
             modelMessage.parts.push({ pt: 'text', text: `[ERROR] ${aFragment.part.error}` });
             break;
 
+          case 'reference':
+            const refPart = aFragment.part;
+            const refPartRt = refPart.rt;
+            switch (refPartRt) {
+
+              case 'zync':
+                const zt = refPart.zType;
+                switch (zt) {
+
+                  case 'asset':
+                    const at = refPart.assetType;
+                    switch (at) {
+
+                      case 'image':
+                        // dereference the Zync Image Asset, converting it to an inline image
+                        const isLastAssistantMessage = _index === lastAssistantMessageIndex;
+                        const resizeMode = isLastAssistantMessage ? false : 'openai-low-res';
+                        try {
+                          modelMessage.parts.push(await aixConvertZyncImageAssetRefToInlineImageOrThrow(refPart, resizeMode));
+                        } catch (error: any) {
+                          if (IGNORE_CGR_NO_IMAGE_DEREFERENCE) console.warn(`Zync asset reference from the assistant missing in the chat generation request because: ${error?.message || error?.toString() || 'Unknown error'} - continuing without`);
+                          else throw error;
+                        }
+                        break;
+
+                      case 'audio':
+                        // dereference the Zync Audio Asset, converting it to an inline buffer
+                        throw '[DEV] audio assets from the assistant are not supported yet';
+
+                      default:
+                        const _exhaustiveCheck: never = at;
+                        console.warn('aixCGR_FromDMessages: unexpected Zync asset type from the assistant', at);
+                        break;
+                    }
+                    break;
+
+                  default:
+                    const _exhaustiveCheck: never = zt;
+                    break;
+                }
+                break;
+
+              case '_sentinel':
+                break; // not a real case
+
+              default:
+                const _exhaustiveCheck: never = refPartRt;
+                console.warn('aixCGR_FromDMessages: unexpected Assistant fragment part type', refPartRt);
+            }
+            break;
+
           case 'image_ref':
             // TODO: rescale shall be dependent on the LLM here - and be careful with the high-res options, as they can
             //  be really space consuming. how to choose between high and low? global option?
@@ -302,6 +559,21 @@ export async function aixCGR_ChatSequence_FromDMessagesOrThrow(
 
 
 /// Parts that differ from DMessage*Part to AIX
+
+export async function aixConvertZyncImageAssetRefToInlineImageOrThrow(assetRefPart: Immutable<DMessageZyncAssetReferencePart>, resizeMode: LLMImageResizeMode | false): Promise<AixParts_InlineImagePart> {
+
+  // during transition period, use legacy fallback if available
+  if (assetRefPart._legacyImageRefPart)
+    return aixConvertImageRefToInlineImageOrThrow(assetRefPart._legacyImageRefPart, resizeMode);
+
+  // Future: Full Asset system implementation
+  // FIXME: [ASSET] get the Blob (local > download if missing) associated to the DAsset, pointed to by the reference, and convert it to base64 when used inline
+  // const asset = await zyncAssetActions().getAssetData(assetRefPart.zUuid);
+  // if (asset && asset.binaryData)
+  //   return _clientCreateAixInlineImagePart(asset.binaryData.base64, asset.mimeType);
+
+  throw new Error(`Asset reference ${assetRefPart.zUuid} - Asset system not yet implemented or legacy fallback missing`);
+}
 
 export async function aixConvertImageRefToInlineImageOrThrow(imageRefPart: DMessageImageRefPart, resizeMode: LLMImageResizeMode | false): Promise<AixParts_InlineImagePart> {
 

@@ -21,9 +21,10 @@ export function posthogAnalyticsOptOut() {
 }
 
 // unused yet
-export function posthogCaptureEvent(eventName: string, properties?: Properties) {
+export function posthogCaptureEvent(eventName: string, properties?: Properties, options?: { sendInstantly?: boolean }) {
   if (isBrowser && hasPostHogAnalytics) {
-    _posthog?.capture(eventName, properties);
+    // For events before navigation (e.g., login button clicks), send immediately
+    _posthog?.capture(eventName, properties, options?.sendInstantly ? { send_instantly: true } : undefined);
   }
 }
 
@@ -84,15 +85,14 @@ export function OptionalPostHogAnalytics() {
         // initialize
         _posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY || '', {
           api_host: '/a/ph', // client analytics host - default: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
-          ui_host: 'https://us.i.posthog.com',
+          ui_host: 'https://us.posthog.com',
           defaults: '2025-05-24',
+          capture_exceptions: true, // captures exceptions using Error Tracking
           // capture_pageview: false, // we used to handle this manually, but changed to the 'defaults' option which captures pageviews automatically
           // capture_pageleave: true, // we used to track goodbyes, now included in 'defaults'
           person_profiles: 'identified_only',
           disable_surveys: true, // disable surveys
-          loaded: (ph) => {
-            if (Release.IsNodeDevBuild) ph.debug();
-          },
+          debug: Release.IsNodeDevBuild, // enable debug mode in development (was: `loaded: (ph) => if (Release.IsNodeDevBuild) ph.debug();`)
         });
 
         // add deployment context - see `next.config.mjs`
@@ -101,7 +101,7 @@ export function OptionalPostHogAnalytics() {
           app_tenant: Release.TenantSlug,
           app_build_hash: fBuild.gitSha || 'unknown',
           app_pkg_version: fBuild.pkgVersion || 'unknown',
-          app_deployment_type: fBuild.deploymentType || 'unknown',
+          // app_deployment_type: fBuild.deploymentType || 'unknown', // unneeded
         });
 
         // trigger router hooks

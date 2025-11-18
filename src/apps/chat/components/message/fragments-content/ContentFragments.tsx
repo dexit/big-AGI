@@ -16,6 +16,7 @@ import { BlockPartImageRef } from './BlockPartImageRef';
 import { BlockPartText_AutoBlocks } from './BlockPartText_AutoBlocks';
 import { BlockPartToolInvocation } from './BlockPartToolInvocation';
 import { BlockPartToolResponse } from './BlockPartToolResponse';
+import { humanReadableFunctionName } from './BlockPartToolInvocation.utils';
 
 
 const _editLayoutSx: SxProps = {
@@ -118,15 +119,19 @@ export function ContentFragments(props: {
       else if (part.pt === 'tool_invocation') {
         if (part.invocation.type === 'function_call') {
           editText = part.invocation.args /* string | null */ || '';
-          editLabel = `[Invocation] Function Call: \`${part.invocation.name}\``;
+          const humanName = humanReadableFunctionName(part.invocation.name, 'function_call');
+          editLabel = `[Invocation] ${humanName} · \`${part.invocation.name}\``;
         } else {
           editText = part.invocation.code;
-          editLabel = `[Invocation] Code Execution: \`${part.invocation.language}\``;
+          const humanName = humanReadableFunctionName('code_execution', 'code_execution');
+          editLabel = `[Invocation] ${humanName} · \`${part.invocation.language}\``;
         }
       } else if (part.pt === 'tool_response') {
         if (!part.error) {
           editText = part.response.result;
-          editLabel = `[Response]: ${part.response.type === 'function_call' ? 'Function Call' : 'Code Execution'}: \`${part.id}\``;
+          const responseName = part.response.type === 'function_call' ? part.response.name : 'code_execution';
+          const humanName = humanReadableFunctionName(responseName, part.response.type);
+          editLabel = `[Response] ${humanName} · \`${part.id}\``;
         }
       }
 
@@ -160,6 +165,51 @@ export function ContentFragments(props: {
             />
           );
 
+        case 'reference':
+          let errorMessage: string;
+          const rt = part.rt;
+          switch (rt) {
+            case 'zync':
+              const zt = part.zType
+              switch (zt) {
+                case 'asset':
+                  // TODO: [ASSET] future: implement rendering for the real Reference to Zync Asset
+                  if (part._legacyImageRefPart?.pt === 'image_ref')
+                    return (
+                      <BlockPartImageRef
+                        key={fId}
+                        imageRefPart={part._legacyImageRefPart}
+                        fragmentId={fId}
+                        contentScaling={props.contentScaling}
+                        onFragmentDelete={props.onFragmentDelete}
+                        onFragmentReplace={props.onFragmentReplace}
+                      />
+                    );
+                  errorMessage = `[DEV] ContentFragment: Asset System not implemented (zync asset ${part.zUuid})`;
+                  break;
+
+                default:
+                  const _exhaustiveCheck: never = zt;
+                  errorMessage = `[DEV] ContentFragment: unsupported zync reference type (${zt})`;
+              }
+              break;
+
+            case '_sentinel':
+              errorMessage = `[DEV] ContentFragment: sentinel reference type (_sentinel)`;
+              break;
+
+            default:
+              const _exhaustiveCheck: never = rt;
+              errorMessage = `[DEV] ContentFragment: unsupported reference type (${rt})`;
+          }
+          return (
+            <BlockPartError
+              key={fId}
+              errorText={errorMessage}
+              messageRole={props.messageRole}
+              contentScaling={props.contentScaling}
+            />
+          );
 
         case 'image_ref':
           return (

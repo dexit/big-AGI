@@ -17,6 +17,7 @@ export interface BackendCapabilities {
   hasLlmLocalAIHost: boolean;
   hasLlmLocalAIKey: boolean;
   hasLlmMistral: boolean;
+  hasLlmMoonshot: boolean;
   hasLlmOllama: boolean;
   hasLlmOpenAI: boolean;
   hasLlmOpenPipe: boolean;
@@ -28,7 +29,6 @@ export interface BackendCapabilities {
   hasDB: boolean;
   hasBrowsing: boolean;
   hasGoogleCustomSearch: boolean;
-  hasImagingProdia: boolean;
   hasVoiceElevenLabs: boolean;
   // hashes
   hashLlmReconfig: string;
@@ -58,6 +58,7 @@ const useBackendCapabilitiesStore = create<BackendStore>()(
     hasLlmLocalAIHost: false,
     hasLlmLocalAIKey: false,
     hasLlmMistral: false,
+    hasLlmMoonshot: false,
     hasLlmOllama: false,
     hasLlmOpenAI: false,
     hasLlmOpenPipe: false,
@@ -68,7 +69,6 @@ const useBackendCapabilitiesStore = create<BackendStore>()(
     hasDB: false,
     hasBrowsing: false,
     hasGoogleCustomSearch: false,
-    hasImagingProdia: false,
     hasVoiceElevenLabs: false,
     hashLlmReconfig: '',
     build: undefined,

@@ -3,6 +3,8 @@ import * as z from 'zod/v4';
 import { LLMS_ALL_INTERFACES } from '~/common/stores/llms/llms.types';
 
 
+export type RequestAccessValues = { headers: HeadersInit; url: string; };
+
 export type ModelDescriptionSchema = z.infer<typeof ModelDescription_schema>;
 
 // export namespace AixWire_API_ListModels {
@@ -75,13 +77,25 @@ const ModelParameterSpec_schema = z.object({
   paramId: z.enum([
     'llmTopP',
     'llmForceNoStream',
+    'llmVndAnt1MContext',
+    'llmVndAntSkills',
     'llmVndAntThinkingBudget',
+    'llmVndAntWebFetch',
+    'llmVndAntWebSearch',
+    'llmVndGeminiAspectRatio',
+    'llmVndGeminiComputerUse',
+    'llmVndGeminiGoogleSearch',
     'llmVndGeminiShowThoughts',
     'llmVndGeminiThinkingBudget',
+    'llmVndMoonshotWebSearch',
     'llmVndOaiReasoningEffort',
+    'llmVndOaiReasoningEffort4',
     'llmVndOaiRestoreMarkdown',
+    'llmVndOaiVerbosity',
     'llmVndOaiWebSearchContext',
     'llmVndOaiWebSearchGeolocation',
+    'llmVndOaiImageGeneration',
+    'llmVndOrtWebSearch',
     'llmVndPerplexityDateFilter',
     'llmVndPerplexitySearchMode',
     'llmVndXaiSearchMode',
@@ -97,7 +111,7 @@ const ModelParameterSpec_schema = z.object({
 
 export const ModelDescription_schema = z.object({
   id: z.string(),
-  idVariant: z.string().optional(),
+  idVariant: z.string().optional(), // only used on the client by '_createDLLMFromModelDescription' to instantiate 'unique' copies of the same model
   label: z.string(),
   created: z.number().optional(),
   updated: z.number().optional(),
