@@ -545,6 +545,9 @@ export function Composer(props: {
 
     // Enter: primary action
     if (e.key === 'Enter') {
+      // Skip if composing (e.g., CJK input methods) - issue #784
+      if (e.nativeEvent.isComposing)
+        return;
 
       // Alt (Windows) or Option (Mac) + Enter: append the message instead of sending it
       if (e.altKey && !e.metaKey && !e.ctrlKey) {
@@ -905,7 +908,7 @@ export function Composer(props: {
                   )}
 
                   {!showChatInReferenceTo && !isDraw && tokenLimit > 0 && (
-                    <TokenBadgeMemo hideBelowDollars={0.005} chatPricing={tokenChatPricing} direct={tokensComposer} history={tokensHistory} responseMax={tokensResponseMax} limit={tokenLimit} showCost={labsShowCost} enableHover={!isMobile} showExcess absoluteBottomRight />
+                    <TokenBadgeMemo hideBelowDollars={0.01} chatPricing={tokenChatPricing} direct={tokensComposer} history={tokensHistory} responseMax={tokensResponseMax} limit={tokenLimit} showCost={labsShowCost} enableHover={!isMobile} showExcess absoluteBottomRight />
                   )}
 
                 </Box>

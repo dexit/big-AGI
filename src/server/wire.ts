@@ -1,5 +1,8 @@
 import * as z from 'zod/v4';
 
+import { objectDeepCloneWithStringLimit } from '~/common/util/objectUtils';
+
+
 /// set this to true to see the tRPC and fetch requests made by the server
 export const SERVER_DEBUG_WIRE = false; //
 
@@ -165,6 +168,7 @@ export function abortableDelay(delayMs: number, abortSignal: AbortSignal): Promi
 export class ServerDebugWireEvents {
   private sequenceNumber: number = 0;
   private lastMs: number | null = null;
+  private distinct: string = Date.now().toString(36).slice(-3);
 
   onMessage(message: any) {
     this.sequenceNumber++;
@@ -172,7 +176,10 @@ export class ServerDebugWireEvents {
       const nowMs = Date.now();
       const elapsedMs = this.lastMs ? nowMs - this.lastMs : 0;
       this.lastMs = nowMs;
-      console.log(`<- SSE (${this.sequenceNumber}, ${elapsedMs} ms):`, message);
+      console.log(
+        `<- SSE (${this.distinct}, ${this.sequenceNumber}, ${elapsedMs} ms):`,
+        objectDeepCloneWithStringLimit(message, 'wire.sse-debug', 8192)
+      );
     }
   }
 }

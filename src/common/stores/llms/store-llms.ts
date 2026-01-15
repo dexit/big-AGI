@@ -15,6 +15,7 @@ import type { DModelDomainId } from './model.domains.types';
 import type { DModelParameterId, DModelParameterValues } from './llms.parameters';
 import type { DModelsService, DModelsServiceId } from './llms.service.types';
 import { DLLM, DLLMId, LLM_IF_OAI_Fn, LLM_IF_OAI_Vision } from './llms.types';
+import { DModelParameterRegistry } from './llms.parameters';
 import { createDModelConfiguration, DModelConfiguration } from './modelconfiguration.types';
 import { createLlmsAssignmentsSlice, LlmsAssignmentsActions, LlmsAssignmentsSlice, LlmsAssignmentsState, llmsHeuristicUpdateAssignments } from './store-llms-domains_slice';
 import { getDomainModelConfiguration } from './hooks/useModelDomain';
@@ -81,7 +82,9 @@ export const useModelsStore = create<LlmsStore>()(persist(
         if (keepUserEdits) {
           serviceLLMs = serviceLLMs.map((llm: DLLM): DLLM => {
             const existing = existingLLMs.find(m => m.id === llm.id);
-            return !existing ? llm : {
+            if (!existing) return llm;
+
+            const result = {
               ...llm,
               ...(existing.userLabel !== undefined ? { userLabel: existing.userLabel } : {}),
               ...(existing.userHidden !== undefined ? { userHidden: existing.userHidden } : {}),
@@ -91,6 +94,30 @@ export const useModelsStore = create<LlmsStore>()(persist(
               ...(existing.userMaxOutputTokens !== undefined ? { userMaxOutputTokens: existing.userMaxOutputTokens } : {}),
               ...(existing.userPricing !== undefined ? { userPricing: existing.userPricing } : {}),
             };
+
+            // clean up stale parameters from userParameters - e.g. was in the model spec but removed in the new version
+            if (result.userParameters) {
+              for (const key of Object.keys(result.userParameters)) {
+                const paramId = key as DModelParameterId;
+                const paramSpec = llm.parameterSpecs.find(spec => spec.paramId === paramId);
+
+                // Remove if param no longer in spec
+                if (!paramSpec) {
+                  delete result.userParameters[paramId];
+                  continue;
+                }
+
+                // For enum types, validate the value is still in the allowed values (e.g., 'medium' was removed from thinkingLevel)
+                const regDef = DModelParameterRegistry[paramId];
+                if (regDef && regDef.type === 'enum' && 'values' in regDef) {
+                  const currentValue = result.userParameters[paramId];
+                  if (currentValue !== undefined && !(regDef.values as readonly unknown[]).includes(currentValue))
+                    delete result.userParameters[paramId]; // Reset to default (undefined)
+                }
+              }
+            }
+
+            return result;
           });
         }
 

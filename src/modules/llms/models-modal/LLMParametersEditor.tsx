@@ -32,6 +32,19 @@ const _reasoningEffort4Options = [
   { value: 'minimal', label: 'Minimal', description: 'Fastest, cheapest, least reasoning' } as const,
   { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
 ] as const;
+const _reasoningEffort52Options = [
+  { value: 'xhigh', label: 'Max', description: 'Hardest thinking, best quality' } as const,
+  { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
+  { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
+  { value: 'low', label: 'Low', description: 'Quick, concise responses' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
+] as const;
+const _reasoningEffort52ProOptions = [
+  { value: 'xhigh', label: 'Max', description: 'Hardest thinking, best quality' } as const,
+  { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
+  { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
+] as const;
 const _verbosityOptions = [
   { value: 'high', label: 'Detailed', description: 'Thorough responses, great for audits' } as const,
   { value: 'medium', label: 'Balanced', description: 'Standard detail level (default)' } as const,
@@ -68,6 +81,18 @@ const _geminiAspectRatioOptions = [
   { value: '21:9', label: '21:9', description: 'Ultra wide' },
 ] as const;
 
+const _geminiImageSizeOptions = [
+  { value: _UNSPECIFIED, label: 'Default', description: '1K (default)' },
+  { value: '1K', label: '1K', description: 'Default' },
+  { value: '2K', label: '2K', description: '2K' },
+  { value: '4K', label: '4K', description: '4K' },
+] as const;
+
+const _geminiCodeExecutionOptions = [
+  { value: 'auto', label: 'On', description: 'Enable code generation and execution' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
 const _geminiGoogleSearchOptions = [
   { value: 'unfiltered', label: 'On', description: 'Web Search' },
   { value: '1d', label: 'Last Day', description: 'Last 24 hours' },
@@ -76,6 +101,29 @@ const _geminiGoogleSearchOptions = [
   { value: '1y', label: 'Last Year', description: 'Results since last year' },
   // { value: '6m', label: 'Last 6 Months', description: 'Results from last 6 months' },
   { value: _UNSPECIFIED, label: 'Off', description: 'Default (disabled)' },
+] as const;
+
+const _geminiMediaResolutionOptions = [
+  { value: 'mr_high', label: 'High', description: 'Best quality, higher token usage' },
+  { value: 'mr_medium', label: 'Medium', description: 'Balanced quality and cost' },
+  { value: 'mr_low', label: 'Low', description: 'Faster, lower cost' },
+  { value: _UNSPECIFIED, label: 'Auto', description: 'Model decides based on media' },
+] as const;
+
+// Gemini 3 Pro: 2-level thinking (high, low)
+const _geminiThinkingLevelOptions = [
+  { value: 'high', label: 'High', description: 'Maximum reasoning depth' },
+  { value: 'low', label: 'Low', description: 'Quick responses' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Model decides' },
+] as const;
+
+// Gemini 3 Flash: 4-level thinking (high, medium, low, minimal)
+const _geminiThinkingLevel4Options = [
+  { value: 'high', label: 'High', description: 'Maximum reasoning depth' },
+  { value: 'medium', label: 'Medium', description: 'Balanced reasoning' },
+  { value: 'low', label: 'Low', description: 'Quick responses' },
+  { value: 'minimal', label: 'Minimal', description: 'Fastest, least reasoning' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Model decides' },
 ] as const;
 
 const _xaiSearchModeOptions = [
@@ -92,6 +140,12 @@ const _antWebSearchOptions = [
 const _antWebFetchOptions = [
   { value: 'auto', label: 'On', description: 'Enable fetching web content and PDFs' },
   { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _antEffortOptions = [
+  { value: _UNSPECIFIED, label: 'High', description: 'Maximum capability (default)' },
+  { value: 'medium', label: 'Medium', description: 'Balanced speed and quality' },
+  { value: 'low', label: 'Low', description: 'Fastest, most efficient' },
 ] as const;
 
 // const _moonshotWebSearchOptions = [
@@ -161,17 +215,25 @@ export function LLMParametersEditor(props: {
     llmTemperature = FALLBACK_LLM_PARAM_TEMPERATURE, // fallback for undefined, result is number | null
     llmForceNoStream,
     llmVndAnt1MContext,
+    llmVndAntEffort,
     llmVndAntSkills,
     llmVndAntThinkingBudget,
     llmVndAntWebFetch,
     llmVndAntWebSearch,
     llmVndGeminiAspectRatio,
+    llmVndGeminiCodeExecution,
     llmVndGeminiGoogleSearch,
+    llmVndGeminiImageSize,
+    llmVndGeminiMediaResolution,
     llmVndGeminiShowThoughts,
     llmVndGeminiThinkingBudget,
+    llmVndGeminiThinkingLevel,
+    llmVndGeminiThinkingLevel4,
     // llmVndMoonshotWebSearch,
     llmVndOaiReasoningEffort,
     llmVndOaiReasoningEffort4,
+    llmVndOaiReasoningEffort52,
+    llmVndOaiReasoningEffort52Pro,
     llmVndOaiRestoreMarkdown,
     llmVndOaiWebSearchContext,
     llmVndOaiWebSearchGeolocation,
@@ -220,8 +282,8 @@ export function LLMParametersEditor(props: {
   const gemTBSpec = modelParamSpec['llmVndGeminiThinkingBudget'];
   const gemTBMinMax = gemTBSpec?.rangeOverride || defGemTB.range;
 
-  // Check if web search should be disabled due to minimal reasoning effort
-  const isOaiReasoningEffortMinimal = llmVndOaiReasoningEffort4 === 'minimal';
+  // Check if web search should be disabled due to minimal/none reasoning effort
+  const isOaiReasoningEffortMinimal = llmVndOaiReasoningEffort4 === 'minimal' || llmVndOaiReasoningEffort52 === 'none';
 
   return <>
 
@@ -287,6 +349,19 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndAntEffort') && (
+      <FormSelectControl
+        title='Effort'
+        tooltip='Controls token usage vs. thoroughness. Low = fastest, most efficient. High = maximum capability (default). Works alongside thinking budget.'
+        value={llmVndAntEffort ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'high') onRemoveParameter('llmVndAntEffort');
+          else onChangeParameter({ llmVndAntEffort: value });
+        }}
+        options={_antEffortOptions}
+      />
+    )}
+
     {showParam('llmVndAntWebSearch') && (
       <FormSelectControl
         title='Web Search'
@@ -331,6 +406,19 @@ export function LLMParametersEditor(props: {
     )}
 
 
+    {showParam('llmVndGeminiImageSize') && (
+      <FormSelectControl
+        title='Image Size'
+        tooltip='Controls the resolution of generated images'
+        value={llmVndGeminiImageSize ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiImageSize');
+          else onChangeParameter({ llmVndGeminiImageSize: value });
+        }}
+        options={_geminiImageSizeOptions}
+      />
+    )}
+
     {showParam('llmVndGeminiAspectRatio') && (
       <FormSelectControl
         title='Aspect Ratio'
@@ -344,10 +432,25 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+
+    {showParam('llmVndGeminiGoogleSearch') && (
+      <FormSelectControl
+        title='Google Search'
+        // tooltip='Enable Google Search grounding to ground responses in real-time web content. Optionally filter results by publication date.'
+        value={llmVndGeminiGoogleSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiGoogleSearch');
+          else onChangeParameter({ llmVndGeminiGoogleSearch: value });
+        }}
+        options={_geminiGoogleSearchOptions}
+      />
+    )}
+
+
     {showParam('llmVndGeminiShowThoughts') && (
       <FormSwitchControl
-        title='Show Chain of Thought'
-        description={`Displays Gemini\'s reasoning process`}
+        title='Show Reasoning'
+        description='Show chain of thoughts'
         checked={!!llmVndGeminiShowThoughts}
         onChange={checked => onChangeParameter({ llmVndGeminiShowThoughts: checked })}
       />
@@ -390,16 +493,55 @@ export function LLMParametersEditor(props: {
       />
     )}
 
-    {showParam('llmVndGeminiGoogleSearch') && (
+    {showParam('llmVndGeminiThinkingLevel') && (
       <FormSelectControl
-        title='Google Search'
-        // tooltip='Enable Google Search grounding to ground responses in real-time web content. Optionally filter results by publication date.'
-        value={llmVndGeminiGoogleSearch ?? _UNSPECIFIED}
+        title='Thinking Level'
+        tooltip='Controls internal reasoning depth for Gemini 3 Pro. When unset, the model decides dynamically.'
+        value={llmVndGeminiThinkingLevel ?? _UNSPECIFIED}
         onChange={(value) => {
-          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiGoogleSearch');
-          else onChangeParameter({ llmVndGeminiGoogleSearch: value });
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiThinkingLevel');
+          else onChangeParameter({ llmVndGeminiThinkingLevel: value });
         }}
-        options={_geminiGoogleSearchOptions}
+        options={_geminiThinkingLevelOptions}
+      />
+    )}
+
+    {showParam('llmVndGeminiThinkingLevel4') && (
+      <FormSelectControl
+        title='Thinking Level'
+        tooltip='Controls internal reasoning depth for Gemini 3 Flash. When unset, the model decides dynamically.'
+        value={llmVndGeminiThinkingLevel4 ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiThinkingLevel4');
+          else onChangeParameter({ llmVndGeminiThinkingLevel4: value });
+        }}
+        options={_geminiThinkingLevel4Options}
+      />
+    )}
+
+    {showParam('llmVndGeminiCodeExecution') && (
+      <FormSelectControl
+        title='Code Execution'
+        tooltip='Enable automatic Python code generation and execution by the model'
+        value={llmVndGeminiCodeExecution ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiCodeExecution');
+          else onChangeParameter({ llmVndGeminiCodeExecution: value });
+        }}
+        options={_geminiCodeExecutionOptions}
+      />
+    )}
+
+    {showParam('llmVndGeminiMediaResolution') && (
+      <FormSelectControl
+        title='Media Resolution'
+        tooltip='Controls vision processing quality for multimodal inputs. Higher resolution improves text reading and detail identification but increases token usage.'
+        value={llmVndGeminiMediaResolution ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndGeminiMediaResolution');
+          else onChangeParameter({ llmVndGeminiMediaResolution: value });
+        }}
+        options={_geminiMediaResolutionOptions}
       />
     )}
 
@@ -510,6 +652,32 @@ export function LLMParametersEditor(props: {
             onChangeParameter({ llmVndOaiReasoningEffort4: value });
         }}
         options={_reasoningEffort4Options}
+      />
+    )}
+
+    {showParam('llmVndOaiReasoningEffort52') && (
+      <FormSelectControl
+        title='Reasoning Effort'
+        tooltip='Controls how much effort the model spends on reasoning (5-level scale for GPT-5.2)'
+        value={(!llmVndOaiReasoningEffort52 /*|| llmVndOaiReasoningEffort52 === 'none'*/) ? _UNSPECIFIED : llmVndOaiReasoningEffort52}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOaiReasoningEffort52');
+          else onChangeParameter({ llmVndOaiReasoningEffort52: value });
+        }}
+        options={_reasoningEffort52Options}
+      />
+    )}
+
+    {showParam('llmVndOaiReasoningEffort52Pro') && (
+      <FormSelectControl
+        title='Reasoning Effort'
+        tooltip='Controls how much effort the model spends on reasoning (3-level scale for GPT-5.2 Pro)'
+        value={(!llmVndOaiReasoningEffort52Pro /*|| llmVndOaiReasoningEffort52Pro === 'medium'*/) ? _UNSPECIFIED : llmVndOaiReasoningEffort52Pro}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndOaiReasoningEffort52Pro');
+          else onChangeParameter({ llmVndOaiReasoningEffort52Pro: value });
+        }}
+        options={_reasoningEffort52ProOptions}
       />
     )}
 

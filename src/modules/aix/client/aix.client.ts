@@ -14,7 +14,7 @@ import { metricsStoreAddChatGenerate } from '~/common/stores/metrics/store-metri
 import { webGeolocationCached } from '~/common/util/webGeolocationUtils';
 
 // NOTE: pay particular attention to the "import type", as this is importing from the server-side Zod definitions
-import type { AixAPI_Access, AixAPI_ConnectionOptions_ChatGenerate, AixAPI_Context_ChatGenerate, AixAPI_Model, AixAPIChatGenerate_Request } from '../server/api/aix.wiretypes';
+import type { AixAPI_Access, AixAPI_ConnectionOptions_ChatGenerate, AixAPI_Context_ChatGenerate, AixAPI_Model, AixAPIChatGenerate_Request, AixWire_Particles } from '../server/api/aix.wiretypes';
 
 import { AixStreamRetry } from './aix.client.retry';
 import { ContentReassembler } from './ContentReassembler';
@@ -47,10 +47,10 @@ export function aixCreateModelFromLLMOptions(
   // destructure input with the overrides
   const {
     llmRef, llmTemperature, llmResponseTokens, llmTopP,
-    llmVndAnt1MContext, llmVndAntSkills, llmVndAntThinkingBudget, llmVndAntWebFetch, llmVndAntWebSearch,
-    llmVndGeminiAspectRatio, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiShowThoughts, llmVndGeminiThinkingBudget,
+    llmVndAnt1MContext, llmVndAntSkills, llmVndAntThinkingBudget, llmVndAntWebFetch, llmVndAntWebSearch, llmVndAntEffort,
+    llmVndGeminiAspectRatio, llmVndGeminiImageSize, llmVndGeminiCodeExecution, llmVndGeminiComputerUse, llmVndGeminiGoogleSearch, llmVndGeminiMediaResolution, llmVndGeminiShowThoughts, llmVndGeminiThinkingBudget, llmVndGeminiThinkingLevel, llmVndGeminiThinkingLevel4,
     // llmVndMoonshotWebSearch,
-    llmVndOaiReasoningEffort, llmVndOaiReasoningEffort4, llmVndOaiRestoreMarkdown, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration,
+    llmVndOaiReasoningEffort, llmVndOaiReasoningEffort4, llmVndOaiReasoningEffort52, llmVndOaiReasoningEffort52Pro, llmVndOaiRestoreMarkdown, llmVndOaiVerbosity, llmVndOaiWebSearchContext, llmVndOaiWebSearchGeolocation, llmVndOaiImageGeneration,
     llmVndOrtWebSearch,
     llmVndPerplexityDateFilter, llmVndPerplexitySearchMode,
     llmVndXaiSearchMode, llmVndXaiSearchSources, llmVndXaiSearchDateFilter,
@@ -105,14 +105,23 @@ export function aixCreateModelFromLLMOptions(
     ...(llmVndAntSkills ? { vndAntSkills: llmVndAntSkills } : {}),
     ...(llmVndAntWebFetch === 'auto' ? { vndAntWebFetch: llmVndAntWebFetch } : {}),
     ...(llmVndAntWebSearch === 'auto' ? { vndAntWebSearch: llmVndAntWebSearch } : {}),
+    ...(llmVndAntEffort ? { vndAntEffort: llmVndAntEffort } : {}),
     ...(llmVndGeminiAspectRatio ? { vndGeminiAspectRatio: llmVndGeminiAspectRatio } : {}),
+    ...(llmVndGeminiCodeExecution === 'auto' ? { vndGeminiCodeExecution: llmVndGeminiCodeExecution } : {}),
     ...(llmVndGeminiComputerUse ? { vndGeminiComputerUse: llmVndGeminiComputerUse } : {}),
-    ...(llmVndGeminiGoogleSearch ? { vndGeminiGoogleSearch: llmVndGeminiGoogleSearch } : {}),
+    ...(llmVndGeminiGoogleSearch ? {
+      vndGeminiGoogleSearch: llmVndGeminiGoogleSearch,
+      vndGeminiUrlContext: 'auto', // NOTE: we are now driving both from the client side, search and fetch, without a dedicated setting, for UX simplicity
+    } : {}),
+    ...(llmVndGeminiImageSize ? { vndGeminiImageSize: llmVndGeminiImageSize } : {}),
+    ...(llmVndGeminiMediaResolution ? { vndGeminiMediaResolution: llmVndGeminiMediaResolution } : {}),
     ...(llmVndGeminiShowThoughts ? { vndGeminiShowThoughts: llmVndGeminiShowThoughts } : {}),
     ...(llmVndGeminiThinkingBudget !== undefined ? { vndGeminiThinkingBudget: llmVndGeminiThinkingBudget } : {}),
+    ...((llmVndGeminiThinkingLevel || llmVndGeminiThinkingLevel4) ? { vndGeminiThinkingLevel: llmVndGeminiThinkingLevel4 || llmVndGeminiThinkingLevel } : {}), // map both 2-level and 4-level thinking params to the same wire field
+    // ...(llmVndGeminiUrlContext === 'auto' ? { vndGeminiUrlContext: llmVndGeminiUrlContext } : {}),
     // ...(llmVndMoonshotWebSearch === 'auto' ? { vndMoonshotWebSearch: 'auto' } : {}),
     ...(llmVndOaiResponsesAPI ? { vndOaiResponsesAPI: true } : {}),
-    ...((llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort) ? { vndOaiReasoningEffort: llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort } : {}),
+    ...((llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort) ? { vndOaiReasoningEffort: llmVndOaiReasoningEffort52Pro || llmVndOaiReasoningEffort52 || llmVndOaiReasoningEffort4 || llmVndOaiReasoningEffort } : {}),
     ...(llmVndOaiRestoreMarkdown ? { vndOaiRestoreMarkdown: llmVndOaiRestoreMarkdown } : {}),
     ...(llmVndOaiVerbosity ? { vndOaiVerbosity: llmVndOaiVerbosity } : {}),
     ...(llmVndOaiWebSearchContext ? { vndOaiWebSearchContext: llmVndOaiWebSearchContext } : {}),
@@ -592,6 +601,7 @@ export interface AixChatGenerateContent_LL {
  *
  * @param onGenerateContentUpdate updated with the same accumulator at every step, and at the end (with isDone=true)
  * @returns the final accumulator object
+ * @throws Error if there are rare low-level errors, or if [CSF] client-side fails to load
  *
  */
 async function _aixChatGenerateContent_LL(
@@ -633,6 +643,16 @@ async function _aixChatGenerateContent_LL(
   };
 
 
+  // [CSF] Pre-load client-side executor if needed
+  let clientSideChatGenerate: typeof import('./aix.client.direct-chatGenerate').clientSideChatGenerate | undefined = undefined;
+  if (aixAccess.clientSideFetch)
+    try {
+      clientSideChatGenerate = (await import('./aix.client.direct-chatGenerate')).clientSideChatGenerate;
+    } catch (error) {
+      throw new Error(`Direct connection unsuccessful: ${(error as any)?.message || 'unknown loading error'}`, { cause: error });
+    }
+
+
   // Retry/Reconnect - low-level state machine
   // - reconnect: for server overload/busy (429, 503, 502) and transient errors
   // - resume: for network disconnects with OpenAI Responses API handle
@@ -668,20 +688,33 @@ async function _aixChatGenerateContent_LL(
 
     try {
 
-      const particleStream = !rsm.resumeHandle ?
+      let particleStream: AsyncIterable<AixWire_Particles.ChatGenerateOp, void>;
 
-        // AIX tRPC Streaming Generation from Chat input
-        await apiStream.aix.chatGenerateContent.mutate({
+      // AIX [CSM] Direct Execution
+      if (!rsm.resumeHandle && clientSideChatGenerate)
+        particleStream = clientSideChatGenerate(
+          aixAccess,
+          aixModel,
+          aixChatGenerate,
+          getLabsDevNoStreaming() ? false : aixStreaming,
+          abortSignal,
+          !!aixConnectionOptions?.enableResumability,
+        );
+
+      // AIX tRPC Streaming Generation from Chat input
+      else if (!rsm.resumeHandle)
+        particleStream = await apiStream.aix.chatGenerateContent.mutate({
           access: aixAccess,
           model: aixModel,
           chatGenerate: aixChatGenerate,
           context: aixContext,
           streaming: getLabsDevNoStreaming() ? false : aixStreaming, // [DEV] disable streaming if set in the UX (testing)
           connectionOptions: aixConnectionOptions,
-        }, { signal: abortSignal }) :
+        }, { signal: abortSignal });
 
-        // AIX tRPC Streaming re-attachment from handle - for low-level auto-resume
-        await apiStream.aix.reattachContent.mutate({
+      // AIX tRPC Streaming re-attachment from handle - for low-level auto-resume
+      else
+        particleStream = await apiStream.aix.reattachContent.mutate({
           access: aixAccess,
           resumeHandle: rsm.resumeHandle,
           context: aixContext,
@@ -729,8 +762,10 @@ async function _aixChatGenerateContent_LL(
         // NOT retryable: e.g. client-abort, or missing handle
         if (errorType === 'client-aborted')
           await reassembler.setClientAborted().catch(console.error /* never */);
-        else
-          await reassembler.setClientExcepted(errorMessage).catch(console.error);
+        else {
+          const errorHint: DMessageErrorPart['hint'] = `aix-${errorType}`; // MUST MATCH our `aixClassifyStreamingError` hints with 'aix-<type>' in DMessageErrorPart
+          await reassembler.setClientExcepted(errorMessage, errorHint).catch(console.error);
+        }
         // ... fall through (traditional single path)
 
       } else {

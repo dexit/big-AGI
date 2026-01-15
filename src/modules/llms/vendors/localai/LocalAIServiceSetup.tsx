@@ -12,6 +12,8 @@ import { ExternalLink } from '~/common/components/ExternalLink';
 import { FormInputKey } from '~/common/components/forms/FormInputKey';
 import { InlineError } from '~/common/components/InlineError';
 import { Link } from '~/common/components/Link';
+import { LocalAIIcon } from '~/common/components/icons/vendors/LocalAIIcon';
+import { SetupFormClientSideToggle } from '~/common/components/forms/SetupFormClientSideToggle';
 import { SetupFormRefetchButton } from '~/common/components/forms/SetupFormRefetchButton';
 
 import { ApproximateCosts } from '../ApproximateCosts';
@@ -37,7 +39,7 @@ export function LocalAIServiceSetup(props: { serviceId: DModelsServiceId }) {
     useServiceSetup(props.serviceId, ModelVendorLocalAI);
 
   // derived state
-  const { oaiHost: localAIHost, oaiKey: localAIKey } = serviceAccess;
+  const { clientSideFetch, oaiHost: localAIHost, oaiKey: localAIKey } = serviceAccess;
 
   // host validation
   const userHostRequired = !backendHasHost;
@@ -96,11 +98,18 @@ export function LocalAIServiceSetup(props: { serviceId: DModelsServiceId }) {
       value={localAIKey} onChange={value => updateSettings({ localAIKey: value })}
     />
 
+    <SetupFormClientSideToggle
+      visible={true}
+      checked={!!clientSideFetch}
+      onChange={on => updateSettings({ csf: on })}
+      helpText="Fetch models and make requests directly from your LocalAI instance using the browser. Recommended for local setups."
+    />
+
     <SetupFormRefetchButton
       refetch={refetch} disabled={!shallFetchSucceed || isFetching} loading={isFetching} error={isError}
       leftButton={
-        <Button color='neutral' variant='solid' disabled={adminOpen} onClick={() => setAdminOpen(true)}>
-          Gallery Admin
+        <Button color='neutral' variant='solid' disabled={adminOpen} onClick={() => setAdminOpen(true)} startDecorator={<LocalAIIcon />}>
+          Install Models
         </Button>
       }
     />

@@ -51,6 +51,93 @@ const PS_DEEP_RESEARCH = [{ paramId: 'llmVndOaiWebSearchContext' as const, initi
 // - "Structured Outputs" is LLM_IF_OAI_Json
 export const _knownOpenAIChatModels: ManualMappings = [
 
+  /// GPT-5.2 series - Released December 11, 2025
+
+  // GPT-5.2
+  {
+    idPrefix: 'gpt-5.2-2025-12-11',
+    label: 'GPT-5.2 (2025-12-11)',
+    description: 'Most capable model for professional work and long-running agents. Improvements in general intelligence, long-context, agentic tool-calling, and vision.',
+    contextWindow: 400000,
+    maxCompletionTokens: 128000,
+    trainingDataCutoff: 'Aug 2025',
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_Tools_WebSearch, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiReasoningEffort52' },
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiRestoreMarkdown' },
+      { paramId: 'llmVndOaiVerbosity' },
+      { paramId: 'llmVndOaiImageGeneration' },
+      { paramId: 'llmForceNoStream' },
+    ],
+    chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 },
+    // benchmark: TBD
+  },
+  {
+    idPrefix: 'gpt-5.2',
+    label: 'GPT-5.2',
+    symLink: 'gpt-5.2-2025-12-11',
+  },
+
+  // GPT-5.2 Codex
+  {
+    idPrefix: 'gpt-5.2-codex',
+    label: 'GPT-5.2 Codex',
+    description: 'GPT-5.2 optimized for long-horizon, agentic coding tasks in Codex or similar environments. Supports low, medium, high, and xhigh reasoning effort settings.',
+    contextWindow: 400000,
+    maxCompletionTokens: 128000,
+    trainingDataCutoff: 'Aug 2025',
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmForceNoStream' },
+      { paramId: 'llmVndOaiReasoningEffort52' },
+      { paramId: 'llmVndOaiWebSearchContext' },
+    ],
+    chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 },
+    // benchmark: TBD
+  },
+
+  // GPT-5.2 Chat Latest
+  {
+    idPrefix: 'gpt-5.2-chat-latest',
+    label: 'GPT-5.2 Instant',
+    description: 'GPT-5.2 model powering ChatGPT. Fast, capable for everyday work with clear improvements in info-seeking, how-tos, technical writing.',
+    contextWindow: 400000,
+    maxCompletionTokens: 128000,
+    trainingDataCutoff: 'Aug 2025',
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE, LLM_IF_Tools_WebSearch, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmVndOaiImageGeneration' },
+    ],
+    chatPrice: { input: 1.75, cache: { cType: 'oai-ac', read: 0.175 }, output: 14 },
+    // benchmark: TBD
+  },
+
+  // GPT-5.2 Pro
+  {
+    idPrefix: 'gpt-5.2-pro-2025-12-11',
+    label: 'GPT-5.2 Pro (2025-12-11)',
+    description: 'Smartest and most trustworthy option for difficult questions. Uses more compute for harder thinking on complex domains like programming.',
+    contextWindow: 400000,
+    maxCompletionTokens: 272000,
+    trainingDataCutoff: 'Aug 2025',
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_MIN, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiReasoningEffort52Pro' },
+      { paramId: 'llmVndOaiWebSearchContext' },
+      { paramId: 'llmForceNoStream' },
+    ],
+    chatPrice: { input: 21, output: 168 },
+    // benchmark: TBD
+  },
+  {
+    idPrefix: 'gpt-5.2-pro',
+    label: 'GPT-5.2 Pro',
+    symLink: 'gpt-5.2-pro-2025-12-11',
+  },
+
+
   /// GPT-5.1 series - Released November 13, 2025
 
   // GPT-5.1
@@ -99,6 +186,22 @@ export const _knownOpenAIChatModels: ManualMappings = [
     // benchmark: TBD
   },
 
+  // GPT-5.1 Codex Max
+  {
+    idPrefix: 'gpt-5.1-codex-max',
+    label: 'GPT-5.1 Codex Max',
+    description: 'Our most intelligent coding model optimized for long-horizon, agentic coding tasks.',
+    contextWindow: 400000,
+    maxCompletionTokens: 128000,
+    trainingDataCutoff: 'Sep 30, 2024',
+    interfaces: [LLM_IF_OAI_Responses, ...IFS_CHAT_CACHE_REASON, LLM_IF_HOTFIX_NoTemperature],
+    parameterSpecs: [
+      { paramId: 'llmVndOaiReasoningEffort4' },
+      { paramId: 'llmForceNoStream' },
+    ],
+    chatPrice: { input: 1.25, cache: { cType: 'oai-ac', read: 0.125 }, output: 10 },
+    // benchmark: TBD
+  },
   // GPT-5.1 Codex
   {
     idPrefix: 'gpt-5.1-codex',
@@ -457,26 +560,6 @@ export const _knownOpenAIChatModels: ManualMappings = [
   },
 
 
-  // o1-mini (deprecated - shutdown 2025-10-27)
-  {
-    hidden: true, // DEPRECATED - shutdown 2025-10-27
-    idPrefix: 'o1-mini-2024-09-12',
-    label: 'o1 Mini (2024-09-12)', // ⏱️
-    description: 'DEPRECATED: Will be shut down on 2025-10-27. Fast, cost-efficient reasoning model tailored to coding, math, and science use cases.',
-    contextWindow: 128000,
-    maxCompletionTokens: 65536,
-    trainingDataCutoff: 'Oct 2023',
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_PromptCaching, LLM_IF_OAI_Reasoning, LLM_IF_HOTFIX_StripImages, LLM_IF_HOTFIX_Sys0ToUsr0],
-    chatPrice: { input: 1.1, cache: { cType: 'oai-ac', read: 0.55 }, output: 4.4 },
-    benchmark: { cbaElo: 1304 },
-    isLegacy: true,
-  },
-  {
-    idPrefix: 'o1-mini',
-    label: 'o1 Mini',
-    symLink: 'o1-mini-2024-09-12',
-  },
-
   /// GPT-4.1 series
 
   // GPT-4.1
@@ -553,9 +636,19 @@ export const _knownOpenAIChatModels: ManualMappings = [
     symLink: 'gpt-audio-2025-08-28',
   },
   {
+    idPrefix: 'gpt-audio-mini-2025-12-15',
+    label: 'GPT Audio Mini (2025-12-15)',
+    description: 'Cost-efficient audio model. Accepts audio inputs and outputs via Chat Completions REST API.',
+    contextWindow: 128000,
+    maxCompletionTokens: 16384,
+    interfaces: IFS_GPT_AUDIO,
+    chatPrice: { input: 0.6, output: 2.4 },
+  },
+  {
     idPrefix: 'gpt-audio-mini-2025-10-06',
     label: 'GPT Audio Mini (2025-10-06)',
-    description: '',
+    hidden: true, // previous version
+    description: 'Cost-efficient audio model. Accepts audio inputs and outputs via Chat Completions REST API.',
     contextWindow: 128000,
     maxCompletionTokens: 16384,
     interfaces: IFS_GPT_AUDIO,
@@ -564,7 +657,7 @@ export const _knownOpenAIChatModels: ManualMappings = [
   {
     idPrefix: 'gpt-audio-mini',
     label: 'GPT Audio Mini',
-    symLink: 'gpt-audio-mini-2025-10-06',
+    symLink: 'gpt-audio-mini-2025-12-15',
   },
 
 
@@ -664,19 +757,6 @@ export const _knownOpenAIChatModels: ManualMappings = [
     hidden: true, // old
     idPrefix: 'gpt-4o-audio-preview-2024-12-17',
     label: 'GPT-4o Audio Preview (2024-12-17)',
-    description: 'Snapshot for the Audio API model.',
-    contextWindow: 128000,
-    maxCompletionTokens: 16384,
-    trainingDataCutoff: 'Oct 2023',
-    interfaces: IFS_GPT_AUDIO,
-    chatPrice: { input: 2.5, output: 10 /* AUDIO PRICING UNSUPPORTED 40/80 */ },
-    // benchmarks don't apply to audio models
-    isPreview: true,
-  },
-  {
-    hidden: true, // old
-    idPrefix: 'gpt-4o-audio-preview-2024-10-01',
-    label: 'GPT-4o Audio Preview (2024-10-01)',
     description: 'Snapshot for the Audio API model.',
     contextWindow: 128000,
     maxCompletionTokens: 16384,
@@ -883,6 +963,7 @@ const openAIModelsDenyList: string[] = [
   '4o-realtime',
   '4o-mini-realtime',
   'gpt-realtime',
+  'gpt-realtime-mini',
 
   // [OpenAI, 2025-03-11] FIXME: NOT YET SUPPORTED - "RESPONSES API"
   'computer-use-preview', 'computer-use-preview-2025-03-11', // FIXME: support these
@@ -914,7 +995,7 @@ const openAIModelsDenyList: string[] = [
   'whisper-1', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', // FIXME: support these
 
   // Image models: /v1/images/generations
-  'gpt-image-1', 'gpt-image-1-mini', 'dall-e-3', 'dall-e-2',
+  'gpt-image-1.5', 'chatgpt-image-latest', 'gpt-image-1', 'gpt-image-1-mini', 'dall-e-3', 'dall-e-2',
 
   // Video models: /v1/videos
   'sora-2-pro', 'sora-2',
@@ -933,9 +1014,17 @@ export function openAIModelToModelDescription(modelId: string, modelCreated: num
 
 
 const _manualOrderingIdPrefixes = [
+  // GPT-5.2
+  'gpt-5.2-20',
+  'gpt-5.2-pro-20',
+  'gpt-5.2-pro',
+  'gpt-5.2-codex',
+  'gpt-5.2-chat-latest',
+  'gpt-5.2',
   // GPT-5.1
   'gpt-5.1-20',
   'gpt-5.1-chat-latest',
+  'gpt-5.1-codex-max',
   'gpt-5.1-codex',
   'gpt-5.1-codex-mini',
   'gpt-5.1',
@@ -970,7 +1059,6 @@ const _manualOrderingIdPrefixes = [
   'o1-pro',
   'o1-20',
   'o1-preview-',
-  'o1-mini-',
   'o1-',
   // GPT-4.5
   'gpt-4.5-20',
@@ -1077,20 +1165,19 @@ export function openAIInjectVariants(models: ModelDescriptionSchema[], model: Mo
  * that aren't present in the API response (superfluous) and checking for models
  * in the API that we don't have definitions for (missing).
  *
- * @param wireModels is the raw API response from OpenAI, containing the .data[] array
+ * @param apiModels is the raw API response from OpenAI, the .data[] array
  * @param parsedModels is the parsed models array, which should match the wireModels
  */
-export function openaiDevCheckForModelsOverlap_DEV(wireModels: unknown, parsedModels: object[]): void {
+export function openaiDevCheckForModelsOverlap_DEV(apiModels: unknown, parsedModels: object[]): void {
 
   if (DEV_DEBUG_OPENAI_MODELS) {
 
     // Check if wireModels has .data array
-    if (!wireModels || !Array.isArray((wireModels as any)?.data)) {
-      console.warn('[DEV] OpenAI: wireModels.data is not an array', wireModels);
+    if (!apiModels || !Array.isArray(apiModels)) {
+      console.warn('[DEV] OpenAI: wireModels is not an array', apiModels);
       return;
     }
 
-    const apiModels = (wireModels as any).data;
     const apiModelIds = apiModels.map((model: any) => model.id);
 
     // 1. Check for superfluous models (in our definitions but not in API)

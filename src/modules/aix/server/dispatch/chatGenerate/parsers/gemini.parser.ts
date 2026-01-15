@@ -9,6 +9,7 @@ import { geminiConvertPCM2WAV } from './gemini.audioutils';
 
 
 // configuration
+const COLLAPSE_EMPTY_TEXT_PARTS = true;
 const ENABLE_RECITATIONS_AS_CITATIONS = false;
 
 
@@ -34,6 +35,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
   let sentRequestedModelName = false;
   let sentActualModelName = false;
   let timeToFirstEvent: number;
+  let collapsedTextPartForReasoning = false;
   let skipComputingTotalsOnce = isStreaming;
   let groundingIndexNumber = 0;
 
@@ -108,15 +110,29 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
 
       // -> Candidates[0] -> Content
       for (const mPart of (candidate0.content?.parts || [])) {
+
+        // [Gemini 3, 2025-11-18] Extract thoughtSignature once (can appear on any part type)
+        // https://ai.google.dev/gemini-api/docs/gemini-3?thinking=high#thought_signatures
+        const thoughtSignature = ('thoughtSignature' in mPart && mPart.thoughtSignature) ? mPart.thoughtSignature : undefined;
+
         switch (true) {
 
           // <- TextPart
           case 'text' in mPart:
             // [Gemini, 2025-01-23] CoT support
-            if (mPart.thought)
-              pt.appendReasoningText(mPart.text || '');
-            else
-              pt.appendText(mPart.text || '');
+            if (mPart.thought) {
+              pt.appendReasoningText(mPart.text || '', collapsedTextPartForReasoning ? { restart: true } : undefined);
+              collapsedTextPartForReasoning = false;
+            } else {
+              // NOTE: considering the below, but not yet
+              // don't send an empty text part, which may happen in between reasoning parts
+              // and this way we can merge them
+              // if (mPart.text?.length)
+              if (!COLLAPSE_EMPTY_TEXT_PARTS || mPart.text)
+                pt.appendText(mPart.text || '');
+              else
+                collapsedTextPartForReasoning = true;
+            }
             break;
 
           // <- InlineDataPart
@@ -155,6 +171,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
           // <- FunctionCallPart
           case 'functionCall' in mPart:
             let { id: fcId, name: fcName, args: fcArgs } = mPart.functionCall;
+
             // Validate the function call arguments - we expect a JSON object, not just any JSON value
             if (!fcArgs || typeof fcArgs !== 'object')
               console.warn(`[Gemini] Invalid function call arguments: ${JSON.stringify(fcArgs)} for ${fcName}`);
@@ -191,6 +208,9 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
             const _exhaustiveCheck: never = mPart;
             throw new Error(`unexpected content part: ${JSON.stringify(mPart)}`);
         }
+
+        // Set the thought signature if available
+        thoughtSignature && pt.sendSetVendorState('gemini', { thoughtSignature: mPart.thoughtSignature });
       }
 
       // -> Candidates[0] -> Safety Ratings
@@ -264,6 +284,7 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
           case 'NO_IMAGE': // The model was expected to generate an image, but none was generated
           case 'UNEXPECTED_TOOL_CALL': // Model generated a tool call but no tools were enabled in the request
           case 'TOO_MANY_TOOL_CALLS': // Model called too many tools consecutively, execution limit exceeded
+          case 'MISSING_THOUGHT_SIGNATURE': // [Gemini 3] Thinking model validation failed - thoughtSignature missing
           case 'FINISH_REASON_UNSPECIFIED':
             const reasonMap: Record<typeof candidate0.finishReason, [AixWire_Particles.GCTokenStopReason, string, string | null]> = {
               'SAFETY': ['filter-content', `Generation stopped due to SAFETY: ${_explainGeminiSafetyIssues(candidate0.safetyRatings)}`, null],
@@ -281,11 +302,14 @@ export function createGeminiGenerateContentResponseParser(requestedModelName: st
               'NO_IMAGE': ['cg-issue', 'Image generation failed: no image generated', null],
               'UNEXPECTED_TOOL_CALL': ['cg-issue', 'Generation stopped: tool call made but no tools enabled', null],
               'TOO_MANY_TOOL_CALLS': ['cg-issue', 'Generation stopped: too many consecutive tool calls', null],
+              'MISSING_THOUGHT_SIGNATURE': ['cg-issue', 'Generation stopped: request has at least one Gemini thought signature missing', null],
               'FINISH_REASON_UNSPECIFIED': ['cg-issue', 'Generation stopped and no reason was given', null],
             } as const;
             const reason = reasonMap[candidate0.finishReason];
             pt.setTokenStopReason(reason[0]);
-            return pt.setDialectTerminatingIssue(reason[1], reason[2], false);
+            // append finishMessage if available for more context
+            const issueMessage = candidate0.finishMessage ? `${reason[1]}: ${candidate0.finishMessage}` : reason[1];
+            return pt.setDialectTerminatingIssue(issueMessage, reason[2], false);
 
           default:
             // Exhaustiveness check - if we get here, Gemini added a new finishReason
