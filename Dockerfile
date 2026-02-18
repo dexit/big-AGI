@@ -1,3 +1,6 @@
+# syntax=docker/dockerfile:1
+# check=skip=CopyIgnoredFile
+
 # Base
 FROM node:24-alpine AS base
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -38,6 +41,10 @@ ENV NEXT_PUBLIC_GA4_MEASUREMENT_ID=${NEXT_PUBLIC_GA4_MEASUREMENT_ID}
 # Optional argument to configure PostHog at build time (see: docs/deploy-analytics.md)
 ARG NEXT_PUBLIC_POSTHOG_KEY
 ENV NEXT_PUBLIC_POSTHOG_KEY=${NEXT_PUBLIC_POSTHOG_KEY}
+
+# Optional argument to configure Google Drive Picker at build time (can reuse AUTH_GOOGLE_ID value)
+ARG NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID
+ENV NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID}
 
 # Copy development deps and source
 COPY --from=deps /app/node_modules ./node_modules

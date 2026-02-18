@@ -1,7 +1,7 @@
-import { anthropicAccess } from '~/modules/llms/server/anthropic/anthropic.access';
+import { ANTHROPIC_API_PATHS, anthropicAccess } from '~/modules/llms/server/anthropic/anthropic.access';
+import { OPENAI_API_PATHS, openAIAccess } from '~/modules/llms/server/openai/openai.access';
 import { geminiAccess } from '~/modules/llms/server/gemini/gemini.access';
 import { ollamaAccess } from '~/modules/llms/server/ollama/ollama.access';
-import { openAIAccess } from '~/modules/llms/server/openai/openai.access';
 
 import type { AixAPI_Access, AixAPI_Model, AixAPI_ResumeHandle, AixAPIChatGenerate_Request } from '../../api/aix.wiretypes';
 import type { AixDemuxers } from '../stream.demuxers';
@@ -12,6 +12,7 @@ import { aixToAnthropicMessageCreate } from './adapters/anthropic.messageCreate'
 import { aixToGeminiGenerateContent } from './adapters/gemini.generateContent';
 import { aixToOpenAIChatCompletions } from './adapters/openai.chatCompletions';
 import { aixToOpenAIResponses } from './adapters/openai.responsesCreate';
+import { aixToXAIResponses } from './adapters/xai.responsesCreate';
 
 import type { IParticleTransmitter } from './parsers/IParticleTransmitter';
 import { createAnthropicMessageParser, createAnthropicMessageParserNS } from './parsers/anthropic.parser';
@@ -58,23 +59,31 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
           ),
       ) ?? false;
 
-      const anthropicRequest = anthropicAccess(access, '/v1/messages', {
+      const anthropicRequest = anthropicAccess(access, ANTHROPIC_API_PATHS.messages, {
         modelIdForBetaFeatures: model.id,
         vndAntWebFetch: model.vndAntWebFetch === 'auto',
         vndAnt1MContext: model.vndAnt1MContext === true,
         vndAntEffort: !!model.vndAntEffort,
         enableSkills: !!model.vndAntSkills,
+        enableFastMode: model.vndAntInfSpeed === 'fast',
         enableStrictOutputs: !!model.strictJsonOutput || !!model.strictToolInvocations, // [Anthropic, 2025-11-13] for both JSON output and grammar-constrained tool invocations inputs
         enableToolSearch: !!model.vndAntToolSearch,
         enableProgrammaticToolCalling: usesProgrammaticToolCalling,
         // enableCodeExecution: ...
       });
 
+      // Build the request body from model + chat parameters
+      const anthropicBody = aixToAnthropicMessageCreate(model, chatGenerate, streaming);
+
+      // [Anthropic, 2026-02-01] Service-level inference geo routing (e.g. "us")
+      if (access.anthropicInferenceGeo)
+        anthropicBody.inference_geo = access.anthropicInferenceGeo;
+
       return {
         request: {
           ...anthropicRequest,
           method: 'POST',
-          body: aixToAnthropicMessageCreate(model, chatGenerate, streaming),
+          body: anthropicBody,
         },
         demuxerFormat: streaming ? 'fast-sse' : null,
         chatGenerateParse: streaming ? createAnthropicMessageParser() : createAnthropicMessageParserNS(),
@@ -107,7 +116,7 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
     case 'ollama':
       return {
         request: {
-          ...ollamaAccess(access, '/v1/chat/completions'), // use the OpenAI-compatible endpoint
+          ...ollamaAccess(access, OPENAI_API_PATHS.chatCompletions), // use the OpenAI-compatible endpoint
           method: 'POST',
           // body: ollamaChatCompletionPayload(model, _hist, streaming),
           body: aixToOpenAIChatCompletions('openai', model, chatGenerate, streaming),
@@ -135,26 +144,46 @@ export function createChatGenerateDispatch(access: AixAPI_Access, model: AixAPI_
     case 'perplexity':
     case 'togetherai':
     case 'xai':
+    case 'zai':
 
-      // switch to the Responses API if the model supports it
+      // newer: OpenAI Responses API, for models that support it and all XAI models
       const isResponsesAPI = !!model.vndOaiResponsesAPI;
-      if (isResponsesAPI) {
+      const isXAIModel = dialect === 'xai'; // All XAI models are accessed via Responses now
+      if (isResponsesAPI || isXAIModel) {
         return {
           request: {
-            ...openAIAccess(access, model.id, '/v1/responses'),
+            ...openAIAccess(access, model.id, OPENAI_API_PATHS.responses),
             method: 'POST',
-            body: aixToOpenAIResponses(dialect, model, chatGenerate, streaming, enableResumability),
+            /**
+             * xAI uses its own Responses API adapter.
+             *
+             * Key differences from OpenAI Responses API:
+             * - No 'instructions' field - system content prepended to first user message
+             * - xAI-native tools: web_search, x_search, code_execution
+             * - Tool calls come in single chunks
+             *
+             * Note: Response format is compatible with OpenAI parser.
+             */
+            body: isXAIModel ? aixToXAIResponses(model, chatGenerate, streaming, enableResumability)
+              : aixToOpenAIResponses(dialect, model, chatGenerate, streaming, enableResumability),
           },
           demuxerFormat: streaming ? 'fast-sse' : null,
           chatGenerateParse: streaming ? createOpenAIResponsesEventParser() : createOpenAIResponseParserNS(),
         };
       }
 
+      // default: industry-standard OpenAI ChatCompletions API with per-dialect extensions
+      const chatCompletionsBody = aixToOpenAIChatCompletions(dialect, model, chatGenerate, streaming);
+
+      // [OpenRouter] Service-level provider routing parameter
+      if (dialect === 'openrouter' && access.orRequireParameters)
+        chatCompletionsBody.provider = { ...chatCompletionsBody.provider, require_parameters: true };
+
       return {
         request: {
-          ...openAIAccess(access, model.id, '/v1/chat/completions'),
+          ...openAIAccess(access, model.id, OPENAI_API_PATHS.chatCompletions),
           method: 'POST',
-          body: aixToOpenAIChatCompletions(dialect, model, chatGenerate, streaming),
+          body: chatCompletionsBody,
         },
         demuxerFormat: streaming ? 'fast-sse' : null,
         chatGenerateParse: streaming ? createOpenAIChatCompletionsChunkParser() : createOpenAIChatCompletionsParserNS(),
@@ -177,7 +206,7 @@ export function createChatGenerateResumeDispatch(access: AixAPI_Access, resumeHa
     case 'openrouter':
 
       // ASSUME the OpenAI Responses API - https://platform.openai.com/docs/api-reference/responses/get
-      const { url, headers } = openAIAccess(access, '', `/v1/responses/${resumeHandle.responseId}`);
+      const { url, headers } = openAIAccess(access, '', `${OPENAI_API_PATHS.responses}/${resumeHandle.responseId}`);
       const queryParams = new URLSearchParams({
         stream: streaming ? 'true' : 'false',
         ...(!!resumeHandle.startingAfter && { starting_after: resumeHandle.startingAfter.toString() }),
@@ -207,6 +236,7 @@ export function createChatGenerateResumeDispatch(access: AixAPI_Access, resumeHa
     case 'perplexity':
     case 'togetherai':
     case 'xai':
+    case 'zai':
       // Throw on unsupported protocols (Azure and OpenRouter are speculatively supported)
       throw new Error(`Resume not supported for dialect: ${dialect}`);
 

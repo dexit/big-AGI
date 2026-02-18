@@ -44,6 +44,10 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
     .parse(wireModels)
 
     .filter((model) => {
+      // filter-out models that don't even have the type
+      if (!model.type)
+        return false;
+
       // filter-out non-llms
       if (!_togetherAllowTypes.includes(model.type))
         return false;
@@ -82,7 +86,6 @@ export function togetherAIModelsToModelDescriptions(wireModels: unknown): ModelD
         interfaces,
         // parameterSpecs: ...
         // maxCompletionTokens: ...
-        // trainingDataCutoff: ...
         // benchmark: ...
         chatPrice,
         hidden: false,

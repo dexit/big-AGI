@@ -18,6 +18,7 @@ import { createDMessageDataInlineText, createDocAttachmentFragment, DMessageAtta
 
 import type { AttachmentCreationOptions, AttachmentDraft, AttachmentDraftConverter, AttachmentDraftId, AttachmentDraftInput, AttachmentDraftSource, AttachmentDraftSourceOriginFile, DraftEgoFragmentsInputData, DraftWebInputData, DraftYouTubeInputData } from './attachment.types';
 import type { AttachmentsDraftsStore } from './store-attachment-drafts_slice';
+import { attachmentCloudConverterPrefix, attachmentCloudFetchFile, attachmentCloudGoogleWorkspaceExportMIME, CloudFetchError } from './attachment.cloud';
 import { attachmentGetLiveFileId, attachmentSourceSupportsLiveFile } from './attachment.livefile';
 import { guessInputContentTypeFromMime, heuristicMimeTypeFixup, mimeTypeIsDocX, mimeTypeIsPDF, mimeTypeIsPlainText, mimeTypeIsSupportedImage, reverseLookupMimeType } from './attachment.mimetypes';
 import { imageDataToImageAttachmentFragmentViaDBlob } from './attachment.dblobs';
@@ -69,7 +70,8 @@ export function attachmentCreate(source: AttachmentDraftSource): AttachmentDraft
 export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftSource>, edit: (changes: Partial<Omit<AttachmentDraft, 'outputFragments'>>) => void) {
   edit({ inputLoading: true });
 
-  switch (source.media) {
+  const sourceMedia = source.media;
+  switch (sourceMedia) {
 
     // Download URL (page, file, ..) and attach as input
     case 'url':
@@ -228,6 +230,34 @@ export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftS
       }
       break;
 
+    case 'cloud':
+      const cloudLabel = source.fileName || 'Cloud File';
+      const cloudRef = source.webViewLink || `${source.provider}:${source.fileId}`;
+      edit({ label: cloudLabel, ref: cloudRef });
+
+      try {
+        // fetch / export to the destination mime
+        const exportMime = attachmentCloudGoogleWorkspaceExportMIME(source.mimeType);
+        const cloudBlob = await attachmentCloudFetchFile(source.provider, source.fileId, source.accessToken, exportMime);
+
+        // use export mime if we exported, otherwise use source or detected mime
+        const resultMime = exportMime || source.mimeType /* provided outside  */ || cloudBlob.type /* connection */ || 'application/octet-stream';
+
+        edit({
+          input: {
+            mimeType: resultMime,
+            data: cloudBlob,
+            dataSize: cloudBlob.size,
+          },
+        });
+      } catch (error: unknown) {
+        const errorMessage = error instanceof CloudFetchError
+          ? `${error.code}: ${error.details || error.message}`
+          : `Failed to download: ${error instanceof Error ? error.message : String(error)}`;
+        edit({ inputError: errorMessage });
+      }
+      break;
+
     case 'ego':
       edit({
         label: source.label,
@@ -237,6 +267,10 @@ export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftS
           data: source.egoFragmentsInputData,
         },
       });
+      break;
+
+    default:
+      const _exhaustiveCheck: never = sourceMedia;
       break;
   }
 
@@ -258,6 +292,7 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
   const converters: AttachmentDraftConverter[] = [];
 
   const autoAddImages = ENABLE_TEXT_AND_IMAGES && !!options?.hintAddImages;
+  const fromCloud = source.media === 'cloud';
 
   switch (true) {
 
@@ -265,6 +300,7 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
     case mimeTypeIsPlainText(input.mimeType):
       // handle a secondary layer of HTML 'text' origins: drop, paste, and clipboard-read
       const textOriginHtml = source.media === 'text' && input.altMimeType === 'text/html' && !!input.altData;
+      const textOriginClipboard = source.media === 'text' && ['clipboard-read', 'paste'].includes(source.method);
       const isHtmlTable = !!input.altData?.startsWith('<table');
 
       // p1: Tables
@@ -272,12 +308,21 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
         converters.push({ id: 'rich-text-table', name: 'Markdown Table' });
 
       // p2: Text
-      converters.push({ id: 'text', name: attachmentSourceSupportsLiveFile(source) ? 'Text (Live)' : 'Text' });
+      if (fromCloud && input.mimeType === 'text/markdown') {
+        converters.push({ id: 'text', name: 'Markdown' });
+      } else {
+        converters.push({ id: 'text', name: attachmentSourceSupportsLiveFile(source) ? 'Text (Live)' : 'Text' });
+        if (!textOriginHtml && textOriginClipboard) {
+          converters.push({ id: 'text-markdown', name: 'Text -> Markdown' });
+          converters.push({ id: 'text-cleaner', name: 'Text -> Clean HTML' });
+        }
+      }
 
-      // p3: Html
+      // p3: Html -> Markdown, and Html
       if (textOriginHtml) {
-        converters.push({ id: 'rich-text-cleaner', name: 'Cleaner HTML' });
         converters.push({ id: 'rich-text', name: 'HTML · Heavy' });
+        converters.push({ id: 'rich-text-markdown', name: 'HTML -> Markdown' });
+        converters.push({ id: 'rich-text-cleaner', name: 'HTML -> Clean HTML' });
       }
       break;
 
@@ -346,6 +391,12 @@ export function attachmentDefineConverters(source: AttachmentDraftSource, input:
       break;
   }
 
+  // cosmetic for cloud: prepend cloud label prefixes
+  const cloudLabelPrefix = source.media === 'cloud' ? attachmentCloudConverterPrefix(source.mimeType) : '';
+  if (cloudLabelPrefix)
+    for (const converter of converters)
+      converter.name = cloudLabelPrefix + converter.name;
+
   edit({ converters });
 }
 
@@ -389,7 +440,8 @@ function _prepareDocData(source: AttachmentDraftSource, input: Readonly<Attachme
         srcFileSize: source.fileWithHandle.size || input.dataSize,
       };
 
-      switch (source.origin) {
+      const sourceOrigin = source.origin;
+      switch (sourceOrigin) {
         case 'camera':
           fileTitle = source.refPath || _lowCollisionRefString('Camera Photo', 6);
           break;
@@ -407,6 +459,10 @@ function _prepareDocData(source: AttachmentDraftSource, input: Readonly<Attachme
         case 'drop':
           fileTitle = source.refPath || _lowCollisionRefString('Dropped File', 6);
           break;
+        default:
+          const _exhaustiveCheck: never = sourceOrigin;
+          fileTitle = 'File';
+          break;
       }
       return {
         title: fileTitle,
@@ -422,6 +478,25 @@ function _prepareDocData(source: AttachmentDraftSource, input: Readonly<Attachme
         title: converterName || 'Text',
         caption: source.method === 'drop' ? 'Dropped' : 'Pasted',
         refString: humanReadableHyphenated(textRef),
+      };
+
+    // Cloud files
+    case 'cloud':
+      const cloudFileName = source.fileName || 'Cloud File';
+      const cloudProviderLabel = source.provider === 'gdrive' ? 'Google Drive'
+        : source.provider === 'onedrive' ? 'OneDrive'
+          : source.provider === 'dropbox' ? 'Dropbox'
+            : 'Cloud';
+      const cloudRef = `${source.provider}-${source.fileName || _lowCollisionRefString('file', 6)}`;
+      return {
+        title: cloudFileName,
+        caption: `From ${cloudProviderLabel}`,
+        refString: humanReadableHyphenated(cloudRef),
+        // TODO: expand this to allow future redownload - or other location but for the same purpose
+        docMeta: {
+          srcFileName: source.fileName,
+          srcFileSize: source.fileSize || input.dataSize,
+        },
       };
 
     // The application attaching pieces of itself
@@ -501,33 +576,67 @@ export async function attachmentPerformConversion(
 
     switch (converter.id) {
 
-      // text as-is
+      // text
       case 'text':
+      case 'text-cleaner':
+      case 'text-markdown':
         const possibleLiveFileId = await attachmentGetLiveFileId(source);
-        const textContent = await _inputDataToString(input.data, 'text');
-        const textualInlineData = createDMessageDataInlineText(textContent, input.mimeType);
+        let textContent = await _inputDataToString(input.data, 'text');
+        let textContentMime = input.mimeType || 'text/plain';
+
+        switch (converter.id) {
+          case 'text-cleaner':
+            textContent = _cleanPossibleHtmlText(textContent);
+            break;
+          case 'text-markdown':
+            try {
+              const { convertHtmlToMarkdown } = await import('./file-converters/HtmlToMarkdown');
+              textContent = convertHtmlToMarkdown(textContent);
+              textContentMime = 'text/markdown';
+            } catch (error) {
+              console.log('[DEV] Error converting Text (HTML) to Markdown:', error);
+            }
+            break;
+        }
+
+        const textualInlineData = createDMessageDataInlineText(textContent, textContentMime);
         newFragments.push(createDocAttachmentFragment(title, caption, _guessDocVDT(input.mimeType), textualInlineData, refString, DOCPART_DEFAULT_VERSION, docMeta, possibleLiveFileId));
         break;
 
-      // html as-is
+      // html
       case 'rich-text':
+      case 'rich-text-cleaner':
+      case 'rich-text-markdown':
+        let richText: string;
+        if (input.altData)
+          richText = input.altData;
+        else if (input.mimeType === 'text/html')
+          richText = await _inputDataToString(input.data, 'rich-text');
+        else
+          richText = '';
+        let richTextMimeType = 'text/html';
+
+        // html -> cleaner/html or markdown
+        switch (converter.id) {
+          case 'rich-text-cleaner':
+            richText = _cleanPossibleHtmlText(richText);
+            richTextMimeType = 'text/html';
+            break;
+          case 'rich-text-markdown':
+            try {
+              const { convertHtmlToMarkdown } = await import('./file-converters/HtmlToMarkdown');
+              richText = convertHtmlToMarkdown(richText);
+              richTextMimeType = 'text/markdown';
+            } catch (error) {
+              console.log('[DEV] Error converting HTML to Markdown:', error);
+            }
+            break;
+        }
+
         // NOTE: before we had the following: createTextAttachmentFragment(ref || '\n<!DOCTYPE html>', input.altData!), which
         //       was used to wrap the HTML in a code block to facilitate AutoRenderBlocks's parser. Historic note, for future debugging.
-        const richTextData = createDMessageDataInlineText(input.altData || '', input.altMimeType);
+        const richTextData = createDMessageDataInlineText(richText, richTextMimeType);
         newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, richTextData, refString, DOCPART_DEFAULT_VERSION, docMeta));
-        break;
-
-      // html cleaned
-      case 'rich-text-cleaner':
-        const cleanerHtml = (input.altData || '')
-          // remove class and style attributes
-          .replace(/<[^>]+>/g, (tag) =>
-            tag.replace(/ class="[^"]*"/g, '').replace(/ style="[^"]*"/g, ''),
-          )
-          // remove svg elements
-          .replace(/<svg[^>]*>.*?<\/svg>/g, '');
-        const cleanedHtmlData = createDMessageDataInlineText(cleanerHtml, 'text/html');
-        newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, cleanedHtmlData, refString, DOCPART_DEFAULT_VERSION, docMeta));
         break;
 
       // html to markdown table
@@ -535,7 +644,13 @@ export async function attachmentPerformConversion(
         let tableData: DMessageDataInline;
         try {
           const mdTable = htmlTableToMarkdown(input.altData!, false);
-          tableData = createDMessageDataInlineText(mdTable, 'text/markdown');
+          // fall back to source text if the table conversion produced empty/tiny content
+          if (mdTable.replace(/[\s|:\-]/g, '').length < 2) {
+            const fallbackText = await _inputDataToString(input.data, 'rich-text-table');
+            tableData = createDMessageDataInlineText(fallbackText || mdTable, input.mimeType);
+          } else {
+            tableData = createDMessageDataInlineText(mdTable, 'text/markdown');
+          }
         } catch (error) {
           // fallback to text/plain
           const fallbackText = await _inputDataToString(input.data, 'rich-text-table');
@@ -919,14 +1034,28 @@ export async function attachmentPerformConversion(
       case 'unhandled':
         // force the user to explicitly select 'as text' if they want to proceed
         break;
+
+
+      default:
+        const _exhaustiveCheck: never = converter.id;
+        console.warn('[DEV] Unhandled converter type:', _exhaustiveCheck);
+        break;
     }
   }
+
+  // warn if any doc output fragment has empty text content (something went wrong in conversion)
+  // TODO: future: check if the text is a conversion error... can happen with drag & drop
+  const emptyOutputWarnings: string[] = [];
+  for (const fragment of newFragments)
+    if (isDocPart(fragment.part) && fragment.part.data.idt === 'text' && !fragment.part.data.text.trim())
+      emptyOutputWarnings.push('Converted output is empty - the source content may be missing or invalid.');
 
   // update
   replaceOutputFragments(attachment.id, newFragments);
   edit(attachment.id, {
     outputsConverting: false,
     outputsConversionProgress: null,
+    ...(emptyOutputWarnings.length && { outputWarnings: emptyOutputWarnings }),
   });
 }
 
@@ -959,6 +1088,19 @@ async function _inputDataToString(data: AttachmentDraftInput['data'], debugLocat
   }
   console.warn(`[DEV] Expected string or Blob for input data at ${debugLocation}, got:`, typeof data);
   return '';
+}
+
+/**
+ * Simple Client-side cleaning of possible HTML
+ */
+function _cleanPossibleHtmlText(inputStr: string): string {
+  return inputStr
+    // remove class and style attributes
+    .replace(/<[^>]+>/g, (tag) =>
+      tag.replace(/ class="[^"]*"/g, '').replace(/ style="[^"]*"/g, ''),
+    )
+    // remove svg elements
+    .replace(/<svg[^>]*>.*?<\/svg>/g, '');
 }
 
 

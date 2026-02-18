@@ -1,15 +1,20 @@
 import { LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
+import { Release } from '~/common/app.release';
 
 import type { ModelDescriptionSchema } from '../../llm.server.types';
-import { fromManualMapping, ManualMappings } from '../../models.mappings';
+import { fromManualMapping, llmDevCheckModels_DEV, ManualMappings } from '../../models.mappings';
 import { wireGroqModelsListOutputSchema } from '../wiretypes/groq.wiretypes';
+
+
+// dev options
+const DEV_DEBUG_GROQ_MODELS = Release.IsNodeDevBuild; // not in staging to reduce noise
 
 
 /**
  * Groq models.
  * - models list: https://console.groq.com/docs/models
  * - pricing: https://groq.com/pricing/
- * - updated: 2026-01-14
+ * - updated: 2026-01-30
  */
 const _knownGroqModels: ManualMappings = [
 
@@ -65,6 +70,9 @@ const _knownGroqModels: ManualMappings = [
     chatPrice: { input: 1.00, output: 3.00 },
     hidden: true,
   },
+  // REMOVED MODELS (no longer returned by API):
+  // - (Jan 21, 2026) qwen-qwq-32b, qwen-2.5-32b, qwen-2.5-coder-32b
+  // - (Jan 21, 2026) deepseek-r1-distill-llama-70b, deepseek-r1-distill-qwen-32b
 
 
   // Production Models - Compound Systems (pass-through pricing to underlying models)
@@ -116,17 +124,6 @@ const _knownGroqModels: ManualMappings = [
     chatPrice: { input: 0.075, output: 0.30 },
   },
 
-  // Production Models - SDAIA
-  {
-    idPrefix: 'allam-2-7b',
-    label: 'ALLaM 2 · 7B',
-    description: 'SDAIA bilingual Arabic-English model (7B params). Trained on 4T English + 1.2T Arabic/English tokens. 4K context. ~1800 t/s on Groq.',
-    contextWindow: 4096,
-    maxCompletionTokens: 4096,
-    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
-    hidden: true, // Pricing pending
-  },
-
   // Production Models - Meta
   {
     idPrefix: 'meta-llama/llama-guard-4-12b',
@@ -154,6 +151,18 @@ const _knownGroqModels: ManualMappings = [
     maxCompletionTokens: 131072,
     interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
     chatPrice: { input: 0.05, output: 0.08 },
+  },
+
+  // Preview Models - SDAIA
+  {
+    isPreview: true,
+    idPrefix: 'allam-2-7b',
+    label: 'ALLaM 2 7B (Preview)',
+    description: 'ALLaM 2 7B by Saudi Data and AI Authority (SDAIA). Bilingual Arabic-English model. 4K context and max output.',
+    contextWindow: 4096,
+    maxCompletionTokens: 4096,
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
+    hidden: true, // Pricing unknown
   },
 
 ];
@@ -198,6 +207,13 @@ export function groqModelToModelDescription(_model: unknown): ModelDescriptionSc
 
   return description;
 }
+
+export function groqValidateModelDefs_DEV(apiModelIds: string[]): void {
+  if (DEV_DEBUG_GROQ_MODELS) {
+    llmDevCheckModels_DEV('Groq', apiModelIds, _knownGroqModels.map(m => m.idPrefix), { checkUnknown: false });
+  }
+}
+
 
 export function groqModelSortFn(a: ModelDescriptionSchema, b: ModelDescriptionSchema): number {
   // sort hidden at the end
