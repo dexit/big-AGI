@@ -17,7 +17,8 @@ import { useChatAutoSuggestAttachmentPrompts, useChatMicTimeoutMsValue } from '.
 import { useAgiAttachmentPrompts } from '~/modules/aifn/agiattachmentprompts/useAgiAttachmentPrompts';
 import { useBrowseCapability } from '~/modules/browse/store-module-browsing';
 
-import { DLLM, getLLMContextTokens, getLLMPricing, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
+import { DLLM, getLLMContextTokens, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
+import { llmChatPricing_adjusted } from '~/common/stores/llms/llms.pricing';
 import { AudioGenerator } from '~/common/util/audio/AudioGenerator';
 import { AudioPlayer } from '~/common/util/audio/AudioPlayer';
 import { ButtonAttachFilesMemo, openFileForAttaching } from '~/common/components/ButtonAttachFiles';
@@ -63,8 +64,10 @@ import { chatExecuteModeCanAttach, useChatExecuteMode } from '../../execute-mode
 
 import { ButtonAttachCameraMemo, useCameraCaptureModalDialog } from './buttons/ButtonAttachCamera';
 import { ButtonAttachClipboardMemo } from './buttons/ButtonAttachClipboard';
+import { ButtonAttachGoogleDriveMemo } from './buttons/ButtonAttachGoogleDrive';
 import { ButtonAttachScreenCaptureMemo } from './buttons/ButtonAttachScreenCapture';
 import { ButtonAttachWebMemo } from './buttons/ButtonAttachWeb';
+import { hasGoogleDriveCapability, useGoogleDrivePicker } from '~/common/attachment-drafts/useGoogleDrivePicker';
 import { ButtonBeamMemo } from './buttons/ButtonBeam';
 import { ButtonCallMemo } from './buttons/ButtonCall';
 import { ButtonGroupDrawRepeat } from './buttons/ButtonGroupDrawRepeat';
@@ -197,7 +200,7 @@ export function Composer(props: {
   const showChatAttachments = chatExecuteModeCanAttach(chatExecuteMode, props.capabilityHasT2IEdit);
   const {
     /* items */ attachmentDrafts,
-    /* append */ attachAppendClipboardItems, attachAppendDataTransfer, attachAppendEgoFragments, attachAppendFile, attachAppendUrl,
+    /* append */ attachAppendClipboardItems, attachAppendCloudFile, attachAppendDataTransfer, attachAppendEgoFragments, attachAppendFile, attachAppendUrl,
     /* take */ attachmentsRemoveAll, attachmentsTakeAllFragments, attachmentsTakeFragmentsByType,
   } = useAttachmentDrafts(conversationOverlayStore, enableLoadURLsInComposer, chatLLMSupportsImages, handleFilterAGIFile, showChatAttachments === 'only-images');
 
@@ -233,7 +236,7 @@ export function Composer(props: {
   const tokensHistory = _historyTokenCount;
   const tokensResponseMax = getModelParameterValueOrThrow('llmResponseTokens', props.chatLLM?.initialParameters, props.chatLLM?.userParameters, 0) ?? 0;
   const tokenLimit = getLLMContextTokens(props.chatLLM) ?? 0;
-  const tokenChatPricing = getLLMPricing(props.chatLLM)?.chat;
+  const tokenChatPricing = React.useMemo(() => llmChatPricing_adjusted(props.chatLLM), [props.chatLLM]);
 
 
   // Effect: load initial text if queued up (e.g. by /link/share_targetF)
@@ -623,6 +626,8 @@ export function Composer(props: {
 
   const { openWebInputDialog, webInputDialogComponent } = useWebInputModal(handleAttachWebLinks, composeText);
 
+  const { openGoogleDrivePicker, googleDrivePickerComponent } = useGoogleDrivePicker(attachAppendCloudFile, isMobile);
+
 
   // Attachments Down
 
@@ -802,6 +807,11 @@ export function Composer(props: {
                         <ButtonAttachWebMemo disabled={!hasComposerBrowseCapability} onOpenWebInput={openWebInputDialog} />
                       </MenuItem>
 
+                      {/* Responsive Google Drive button */}
+                      {hasGoogleDriveCapability && <MenuItem>
+                        <ButtonAttachGoogleDriveMemo onOpenGoogleDrivePicker={openGoogleDrivePicker} fullWidth />
+                      </MenuItem>}
+
                       {/* Responsive Paste button */}
                       {supportsClipboardRead() && <MenuItem>
                         <ButtonAttachClipboardMemo onAttachClipboard={attachAppendClipboardItems} />
@@ -830,6 +840,9 @@ export function Composer(props: {
 
                 {/* Responsive Web button */}
                 {showChatAttachments !== 'only-images' && <ButtonAttachWebMemo color={showTint} disabled={!hasComposerBrowseCapability} onOpenWebInput={openWebInputDialog} />}
+
+                {/* Responsive Google Drive button */}
+                {hasGoogleDriveCapability && showChatAttachments !== 'only-images' && <ButtonAttachGoogleDriveMemo color={showTint} onOpenGoogleDrivePicker={openGoogleDrivePicker} />}
 
                 {/* Responsive Paste button */}
                 {supportsClipboardRead() && showChatAttachments !== 'only-images' && <ButtonAttachClipboardMemo color={showTint} onAttachClipboard={attachAppendClipboardItems} />}
@@ -1125,6 +1138,9 @@ export function Composer(props: {
 
       {/* Camera (when open) */}
       {cameraCaptureComponent}
+
+      {/* Google Drive Picker (when open) */}
+      {googleDrivePickerComponent}
 
       {/* Web Input Dialog (when open) */}
       {webInputDialogComponent}

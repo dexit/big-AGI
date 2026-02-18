@@ -58,7 +58,7 @@ export namespace OpenAIWire_ContentParts {
   }
 
   export function ImageContentPart(url: string, detail?: 'auto' | 'low' | 'high'): z.infer<typeof ImageContentPart_schema> {
-    return { type: 'image_url', image_url: { url, detail } };
+    return { type: 'image_url', image_url: { url, ...(detail && { detail }) } };
   }
 
   export function OpenAI_AudioContentPart(data: string, format: 'wav' | 'mp3'): z.infer<typeof OpenAI_AudioContentPart_schema> {
@@ -108,16 +108,26 @@ export namespace OpenAIWire_ContentParts {
     }),
   });
 
-  // [OpenRouter, 2025-11-11] Reasoning details - structured reasoning output
-  // https://openrouter.ai/docs/use-cases/reasoning-tokens#reasoning-detail-types
+  // [OpenRouter, 2025-01-20] Reasoning details - structured reasoning output
+  // https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#reasoning-detail-types
   export const OpenRouter_ReasoningDetail_schema = z.object({
     type: z.union([
       z.enum(['reasoning.summary', 'reasoning.text', 'reasoning.encrypted']),
       z.string(),
     ]),
-    text: z.string().optional(), // Actual reasoning text (for 'text' type)
-    summary: z.string().optional(), // Summary of reasoning (for 'summary' type)
-    // 'encrypted' type has no additional fields - indicates reasoning happened but not returned
+    text: z.string().nullish(), // Actual reasoning text (for 'text' type)
+    summary: z.string().nullish(), // Summary of reasoning (for 'summary' type)
+    // we don't use these for now:
+    // signature: z.string().nullable().optional(), // Signature verification (for 'text' type)
+    // // 'encrypted' type has 'data' field - indicates reasoning happened but not returned
+    // data: z.string().optional(), // Encrypted reasoning data (for 'encrypted' type)
+    // // Common metadata fields
+    // id: z.string().nullable().optional(), // Unique identifier for the reasoning detail
+    // format: z.union([
+    //   z.enum(['unknown', 'openai-responses-v1', 'xai-responses-v1', 'anthropic-claude-v1']),
+    //   z.string(),
+    // ]).optional(), // Format of the reasoning detail
+    // index: z.number().optional(), // Sequential index of the reasoning detail
   });
 
 }
@@ -176,7 +186,7 @@ export namespace OpenAIWire_Messages {
       id: z.string(),
     }).nullable().optional(),
 
-    /** [OpenRouter, 2025-11-11] Reasoning traces with multiple blocks (summary, text, encrypted). */
+    /** [OpenRouter, 2025-01-20] Reasoning traces with multiple blocks (summary, text, encrypted). */
     reasoning_details: z.array(OpenAIWire_ContentParts.OpenRouter_ReasoningDetail_schema).optional(),
 
     // function_call: // ignored, as it's deprecated
@@ -290,15 +300,15 @@ export namespace OpenAIWire_API_Chat_Completions {
     parallel_tool_calls: z.boolean().optional(), // defaults to true
 
     // common model configuration
-    max_completion_tokens: z.number().int().positive().optional(), // [OpenAI o1, 2024-09-12]
-    max_tokens: z.number().optional(), // Deprecated in favor of max_completion_tokens - but still used by pre-o1 models and OpenAI-compatible APIs
+    max_completion_tokens: z.number().int().positive().optional(),
+    max_tokens: z.number().optional(), // DEPRECATED
     temperature: z.number().min(0).max(2).optional(),
     top_p: z.number().min(0).max(1).optional(),
 
     // new output modalities
     modalities: z.array(z.enum([
       'text', 'audio',
-      'image' // [OpenRouter, 2025-12-31] Extension for requesting Image output
+      'image', // [OpenRouter, 2025-12-31] Extension for requesting Image output
     ])).optional(), // defaults to ['text']
     audio: z.object({  // Parameters for audio output. Required when audio output is requested with `modalities: ["audio"]`
       voice: z.enum([
@@ -322,10 +332,16 @@ export namespace OpenAIWire_API_Chat_Completions {
       include_usage: z.boolean().optional(), // If set, an additional chunk will be streamed with a 'usage' field on the entire request.
     }).optional(),
     reasoning_effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(), // [OpenAI, 2024-12-17] [Perplexity, 2025-06-23] reasoning effort
+    // OpenAI and [OpenRouter, 2025-01-20] Verbosity parameter - maps to output_config.effort for Anthropic models
+    // https://openrouter.ai/docs/api/reference/parameters#verbosity
+    verbosity: z.enum([
+      'low', 'medium', 'high',
+      'max', // [OpenRouter, 2026-02-06] Anthropic-through-openrouter has its llmVndAntEffort/llmVndAntEffortMax mapped to 'verbosity'
+    ]).optional(), // 'max' is Opus 4.6 only
     // [OpenRouter, 2025-11-11] Unified reasoning parameter for all models
     reasoning: z.object({
-      max_tokens: z.number().int().positive().optional(), // Token-based control (Anthropic, Gemini): 1024-32000
-      effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(), // Effort-based control (OpenAI o1/o3/GPT-5, DeepSeek): allocates % of max_tokens
+      max_tokens: z.int().optional(), // Token-based control (Anthropic, Gemini): 1024-32000
+      effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(), // Effort-based control (OpenAI o1/o3/GPT-5, xAI, DeepSeek): allocates % of max_tokens
       enabled: z.boolean().optional(), // Simple enable with medium effort defaults
       exclude: z.boolean().optional(), // Use reasoning internally without returning it in response
     }).optional(),
@@ -389,23 +405,56 @@ export namespace OpenAIWire_API_Chat_Completions {
     // -- Vendor-specific extensions to the request --
 
     // [OpenRouter, 2025-10-22] OpenRouter-specific plugins parameter for web search and other hosted tools
-    plugins: z.array(z.object({
-      id: z.literal('web'), // plugin identifier, e.g., 'web
-      engine: z.enum(['native', 'exa']).optional(), // search engine: 'native', 'exa', or undefined (auto)
-      max_results: z.number().int().positive().optional(), // defaults to 5
-      search_prompt: z.string().optional(), // custom search prompt
-    })).optional(),
+    plugins: z.array(z.union([
+      z.object({
+        id: z.literal('web'),
+        engine: z.enum(['native', 'exa']).optional(), // search engine: 'native', 'exa', or undefined (auto)
+        max_results: z.number().int().positive().optional(), // defaults to 5
+        search_prompt: z.string().optional(), // custom search prompt
+      }),
+      // [OpenRouter, 2026-02-06] Auto-fixes malformed JSON/tool calls from providers - DISABLED for now
+      // z.object({
+      //   id: z.literal('response-healing'),
+      //   enabled: z.boolean().optional(),
+      // }),
+    ])).optional(),
+
+    // [OpenRouter, 2026-02-06] Provider routing preferences
+    provider: z.object({
+      require_parameters: z.boolean().optional(), // Only route to providers supporting all request params (strict mode)
+      allow_fallbacks: z.boolean().optional(), // Whether to allow backup providers (default: true)
+      data_collection: z.enum(['allow', 'deny']).optional(), // 'deny' = only use providers that don't train on user data
+      sort: z.union([
+        z.enum(['price', 'throughput', 'latency']), // Simple sort preference
+        z.object({
+          by: z.enum(['price', 'throughput', 'latency']).optional(),
+          partition: z.enum(['model', 'none']).optional(),
+        }),
+      ]).optional(),
+      order: z.array(z.string()).optional(), // Ordered list of provider slugs to prefer
+      ignore: z.array(z.string()).optional(), // Provider slugs to skip
+      quantizations: z.array(z.enum(['int4', 'int8', 'fp4', 'fp6', 'fp8', 'fp16', 'bf16', 'fp32', 'unknown'])).optional(),
+    }).optional(),
+
+    // [OpenRouter, 2026-02-06] Debug - echoes what OR sent upstream; not wired, use requestBodyOverride to inject ad-hoc
+    debug: z.object({
+      echo_upstream_body: z.boolean().optional(),
+    }).optional(),
 
     // [Perplexity, 2025-06-23] Perplexity-specific search parameters
     search_mode: z.enum(['academic']).optional(), // Academic filter for scholarly sources
     search_after_date_filter: z.string().optional(), // Date filter in MM/DD/YYYY format
 
-    // [xAI] xAI-specific search parameters
-    search_parameters: z.record(z.string(), z.any()).optional(), // xAI Live Search parameters - keeping flexible for API evolution
+    // [Moonshot, 2026-01-26] Kimi K2.5 thinking mode control
+    thinking: z.object({
+      type: z.enum(['enabled', 'disabled']),
+    }).optional(),
 
     seed: z.number().int().optional(),
     stop: z.array(z.string()).optional(), // Up to 4 sequences where the API will stop generating further tokens.
     user: z.string().optional(),
+    // IGNORING: safety_identifier: z.string().optional(),
+    // IGNORING: prompt_cache_key: z.string().optional(),
 
     // (deprecated upstream, OMITTED BY CHOICE): function_call and functions
 
@@ -461,7 +510,7 @@ export namespace OpenAIWire_API_Chat_Completions {
       reasoning_tokens: z.number().optional(), // [Discord, 2024-04-10] reported missing
       // text_tokens: z.number().optional(), // [Discord, 2024-04-10] revealed as present on custom OpenAI endpoint - not using it here yet
       audio_tokens: z.number().optional(), // [OpenAI, 2024-10-01] audio tokens used in the completion (charged at a different rate)
-      // image_tokens: z.number().optional(), // [OpenRouter, 2025-10-22] first seen.. sounds likely?
+      // image_tokens: z.number().optional(), // [OpenRouter, 2026-02-06] confirmed: image tokens in image generation output
       accepted_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
       rejected_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
     }).optional() // not present in other APIs yet
@@ -656,7 +705,7 @@ export namespace OpenAIWire_API_Chat_Completions {
       }))),
     // delta-reasoning content
     reasoning_content: z.string().nullable().optional(), // [Deepseek, 2025-01-20]
-    // [OpenRouter, 2025-11-11] Reasoning traces
+    // [OpenRouter, 2025-01-20] Reasoning traces
     reasoning_details: z.array(OpenAIWire_ContentParts.OpenRouter_ReasoningDetail_schema).nullish(),
     // delta-tool-calls content
     tool_calls: z.array(ChunkDeltaToolCalls_schema).optional()
@@ -949,49 +998,8 @@ export namespace OpenAIWire_API_Models_List {
 
 
 //
-// Moderations > Create Moderation
-//
-export namespace OpenAIWire_API_Moderations_Create {
-
-  export type Request = z.infer<typeof Request_schema>;
-  const Request_schema = z.object({
-    // input: z.union([z.string(), z.array(z.string())]),
-    input: z.string(),
-    model: z.enum(['text-moderation-stable', 'text-moderation-latest']).optional(),
-  });
-
-  const Category_schema = z.enum([
-    'sexual',
-    'hate',
-    'harassment',
-    'self-harm',
-    'sexual/minors',
-    'hate/threatening',
-    'violence/graphic',
-    'self-harm/intent',
-    'self-harm/instructions',
-    'harassment/threatening',
-    'violence',
-  ]);
-
-  const Result_schema = z.object({
-    flagged: z.boolean(),
-    categories: z.record(Category_schema, z.boolean()),
-    category_scores: z.record(Category_schema, z.number()),
-  });
-
-  export type Response = z.infer<typeof Response_schema>;
-  const Response_schema = z.object({
-    id: z.string(),
-    model: z.string(),
-    results: z.array(Result_schema),
-  });
-
-}
-
-
 // Chat > Responses API
-
+//
 export namespace OpenAIWire_Responses_Items {
 
   // Parts - Input
@@ -1013,6 +1021,7 @@ export namespace OpenAIWire_Responses_Items {
     file_data: z.string().optional(), // content of the file
     file_id: z.string().optional(), // ID of the file
     filename: z.string().optional(), // name of the file
+    // mime_type: z.string().optional(), // [?XAI] optional MIME type for inline uploads (e.g. "application/pdf")
   });
 
 
@@ -1025,11 +1034,11 @@ export namespace OpenAIWire_Responses_Items {
     annotations: z.array(z.object({
       type: z.literal('url_citation'),
       url: z.string(),
-      title: z.string(),
-      start_index: z.number().optional(),
-      end_index: z.number().optional(),
+      title: z.string().optional(), // [xAI] xAI doesn't always send title
+      start_index: z.int().optional(),
+      end_index: z.int().optional(),
     })).optional(),
-    // Log Probabilities are ignored on purpose
+    // [DO-NOT-CARE] // logprobs: ...
   });
 
   export const ContentItem_RefusalPart_schema = z.object({
@@ -1057,7 +1066,7 @@ export namespace OpenAIWire_Responses_Items {
   const OutputContentItem_schema = _OutputItemBase_schema.extend({
     type: z.literal('message'),
     id: z.string(), // unique ID of the output item
-    role: z.literal('assistant'),
+    role: z.literal('assistant'), // [?XAI] also 'tool'?
     content: z.array(_ContentItem_Parts_schema),
   });
 
@@ -1066,8 +1075,9 @@ export namespace OpenAIWire_Responses_Items {
     /**
      * ID seems missing from the reasoning output (at least in response.reasoning_summary_part.added),
      * but the docs say it's required as input?
+     * 2026-01-22: re-enabled with nullish, as XAI lists it as required
      */
-    // id: z.string(),
+    id: z.string().optional(),
     summary: z.array(ReasoningItem_SummaryTextPart_schema), // summary of the reasoning
     encrypted_content: z.string().nullish(), // populated when a response is generated with reasoning.encrypted_content in the include
   });
@@ -1076,16 +1086,16 @@ export namespace OpenAIWire_Responses_Items {
   const OutputFunctionCallItem_schema = _OutputItemBase_schema.extend({
     type: z.literal('function_call'),
     id: z.string().optional(), // unique ID of the output item - optional when looped back to input
-    arguments: z.string(), // FC args STRING (Responses) - JSON string of the arguments to pass to the function
     call_id: z.string(), //  unique ID of the function tool call -- same as ID? verify
     name: z.string(), // name of the function to call
+    arguments: z.string(), // FC args STRING (Responses) - JSON string of the arguments to pass to the function
   });
 
-  // const OutputCustomToolCallItem_schema = _OutputItemBase_schema.extend({
-  //   type: z.literal('custom_tool_call'),
-  //   id: z.string(), // unique ID of the custom tool call
-  //   name: z.string(), // name of the custom tool
-  //   input: z.string().optional(), // text input to the tool
+
+  // const OutputFileSearchCallItem_schema = _OutputItemBase_schema.extend({
+  //   type: z.literal('file_search_call'),
+  //   id: z.string(),
+  //   // OpenAI vector store feature - not implemented
   // });
 
   const OutputWebSearchCallItem_schema = _OutputItemBase_schema.extend({
@@ -1094,8 +1104,10 @@ export namespace OpenAIWire_Responses_Items {
 
     // BREAKING CHANGE from OpenAI - 2025-12-11
     // redefining the following because we need 'searching' too here (seen during web search streaming)
+    // [XAI] 2025-01-23: added 'failed' as xAI returns this when web search fails
     status: z.enum([
       'searching', // 2025-12-11: seen on OpenAI for `web_search_call` items when used with GPT 5.2 Pro, with web search on
+      'failed', // 2025-01-23: seen on xAI for `web_search_call` items when web search fails
       'in_progress', 'completed', 'incomplete',
     ]).optional(),
 
@@ -1123,8 +1135,9 @@ export namespace OpenAIWire_Responses_Items {
       }),
 
       // Action type: 'find_in_page' - searches for a pattern within an opened page
+      // [XAI] added 'find' as per their doc
       z.object({
-        type: z.literal('find_in_page'),
+        type: z.enum(['find_in_page', 'find']),
         pattern: z.string(), // text pattern to search for
         url: z.string(), // URL of the page being searched
       }),
@@ -1152,25 +1165,44 @@ export namespace OpenAIWire_Responses_Items {
     // quality: z.enum(['auto', 'high', 'medium', 'low']).optional(),
   });
 
-  // const OutputCodeInterpreterCallItem_schema = _OutputItemBase_schema.extend({
-  //   type: z.literal('code_interpreter_call'),
-  //   id: z.string(),
-  //   language: z.string().optional(),
-  //   code: z.string().optional(),
-  //   result: z.string().optional(),
-  // });
-
-  // const OutputFileSearchCallItem_schema = _OutputItemBase_schema.extend({
-  //   type: z.literal('file_search_call'),
-  //   id: z.string(),
-  //   // OpenAI vector store feature - not implemented
-  // });
-
   // const OutputMCPCallItem_schema = _OutputItemBase_schema.extend({
   //   type: z.literal('mcp_call'),
   //   id: z.string(),
   //   // MCP (Model Context Protocol) calls - not implemented yet
   // });
+
+  const OutputCodeInterpreterCallItem_schema = _OutputItemBase_schema.extend({
+    type: z.literal('code_interpreter_call'),
+
+    // override
+    status: z.enum([
+      'interpreting', 'failed',
+      'in_progress', 'completed', 'incomplete', // default
+    ]).optional(),
+
+    id: z.string(),
+    container_id: z.string().nullish(),
+    code: z.string().nullish(), // The code to run, or null if not available
+    outputs: z.array(z.union([
+      z.object({
+        type: z.literal('logs'),
+        logs: z.string(),
+      }),
+      z.object({
+        type: z.literal('image'),
+        url: z.string(),
+      }),
+    ])).nullish(),
+  });
+
+  const OutputCustomToolCallItem_schema = _OutputItemBase_schema.extend({
+    type: z.literal('custom_tool_call'),
+    id: z.string(), // unique ID of the custom tool call in the OpenAI platform
+    call_id: z.string(), // identifier to map this custom tool call to a tool call output
+    name: z.string(), // name of the custom tool being called (e.g., "x_user_search")
+    input: z.string(), // the input for the custom tool call generated by the model
+  });
+
 
   /**
    * Output Items:
@@ -1186,13 +1218,22 @@ export namespace OpenAIWire_Responses_Items {
    *
    */
   export const OutputItem_schema = z.union([
-    OutputContentItem_schema,
+    // Text output
+    OutputContentItem_schema, // assistant/tool message/refusal
     OutputReasoningItem,
+
+    // Client tool invocation output
     OutputFunctionCallItem_schema,
-    // OutputCustomToolCallItem_schema, // plain text custom tool output
-    OutputWebSearchCallItem_schema,
+
+    // Hosted tools invocation output
     OutputImageGenerationCallItem_schema,
-    // OutputCodeInterpreterCallItem_schema,
+    OutputWebSearchCallItem_schema, // xAI/OpenAI
+    OutputCodeInterpreterCallItem_schema, // OpenAI/xAI
+    OutputCustomToolCallItem_schema, // xAI x_search uses this (x_user_search, etc.)
+
+    // Additional output items to be added later:
+    // XAI: x_search_call = not documented, will need rev-eng
+
     // OutputFileSearchCallItem_schema,
     // OutputMCPCallItem_schema,
     // ComputerUseCallOutput_schema,
@@ -1201,6 +1242,7 @@ export namespace OpenAIWire_Responses_Items {
     // MCPToolCallOutput_schema,
     // MCPListToolsOutput_schema,
     // MCPApprovalRequestOutput_schema,
+
   ]);
 
 
@@ -1254,7 +1296,7 @@ export namespace OpenAIWire_Responses_Items {
    */
   export type InputMessage_Compat = z.infer<typeof InputMessage_Compat_schema>;
 
-  const _InputMessage_Compat_User_schema = z.object({
+  const _InputMessage_Compat_Client_schema = z.object({
     type: z.literal('message'),
     role: z.enum(['user', 'system', 'developer']),
     // user/system/developer inputs: 'input_text', 'input_image', 'input_file'
@@ -1264,7 +1306,7 @@ export namespace OpenAIWire_Responses_Items {
       Input_FilePart_schema,
     ])),
   });
-  const _InputMessage_Compat_Model_schema = z.object({
+  const _InputMessage_Compat_ModelOutputText_schema = z.object({
     type: z.literal('message'),
     role: z.literal('assistant'),
     // assistant inputs: 'output_text', 'refusal'
@@ -1272,20 +1314,27 @@ export namespace OpenAIWire_Responses_Items {
   });
 
   const InputMessage_Compat_schema = z.union([
-    _InputMessage_Compat_User_schema,
-    _InputMessage_Compat_Model_schema,
+    _InputMessage_Compat_Client_schema,
+    _InputMessage_Compat_ModelOutputText_schema,
   ]);
 
   // Input Item (combined)
 
   export type InputItem = z.infer<typeof InputItem_schema>;
   export const InputItem_schema = z.union([
-    // Old-style Item Message
+    // Old-style User/Assistant History
+    // - user/system/developer (text / image / file)
+    // - assistant output messages (output_text / refusal)
     InputMessage_Compat_schema,
-    // Item:
+
+    // Client Message (text / image / file)
     UserItemMessage_schema,
+    // Client Tool Output
     FunctionToolCallOutput_schema,
+
+    // Previous output
     OutputItem_schema,
+
     // Item Reference (not used yet):
     z.object({
       type: z.literal('item_reference'),
@@ -1298,7 +1347,7 @@ export namespace OpenAIWire_Responses_Tools {
 
   // Custom tool definitions
 
-  const CustomFunctionTool_schema = z.object({
+  export const CustomFunctionTool_schema = z.object({
     type: z.literal('function'),
     name: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),
     description: z.string(), // Used by the model to determine whether or not to call the function.
@@ -1364,10 +1413,18 @@ export namespace OpenAIWire_Responses_Tools {
     size: z.enum(['1024x1024', '1024x1536', '1536x1024', 'auto']).optional(),
   });
 
-  // const CodeInterpreterTool_schema = z.object({
-  //   type: z.literal('code_interpreter'),
-  //   container: z.union([z.string(), z.object({})]), // container ID or object with file IDs
-  // });
+  // Code Interpreter tool - runs Python code in a sandboxed container
+  const CodeInterpreterTool_schema = z.object({
+    type: z.literal('code_interpreter'),
+    container: z.union([
+      z.string(), // explicit container ID
+      z.object({
+        type: z.literal('auto'),
+        file_ids: z.array(z.string()).optional(), // uploaded file IDs to make available
+        memory_limit: z.string().optional(), // e.g., "512m", "1g", "2g", "4g", "8g"
+      }),
+    ]).nullish(), // optional - if omitted, auto mode is used
+  });
 
   // const FileSearchTool_schema = z.object({
   //   type: z.literal('file_search'),
@@ -1389,7 +1446,7 @@ export namespace OpenAIWire_Responses_Tools {
     // hosted tools
     WebSearchTool_schema,
     ImageGenerationTool_schema,
-    // CodeInterpreterTool_schema,
+    CodeInterpreterTool_schema,
     // FileSearchTool_schema, // OpenAI vector store - not implemented
     // MCPTool_schema,
     // ComputerUseTool_schema,
@@ -1413,8 +1470,8 @@ export namespace OpenAIWire_Responses_Tools {
         // 'file_search',
         'web_search', 'web_search_preview', 'web_search_preview_2025_03_11',
         'image_generation',
+        'code_interpreter',
         // 'computer_use_preview',
-        // 'code_interpreter',
         // 'mcp',
         // 'local_shell' ?
       ]),
@@ -1432,7 +1489,7 @@ export namespace OpenAIWire_API_Responses {
 
     // Model configuration
     model: z.string(),
-    max_output_tokens: z.number().int().positive().nullish(),
+    max_output_tokens: z.int().nullish(),
     temperature: z.number().min(0).nullish(), // [OpenAI] Defaults to 1, max: 2
     top_p: z.number().min(0).nullish(), // [OpenAI] Defaults to 1, max: 1
 
@@ -1477,11 +1534,11 @@ export namespace OpenAIWire_API_Responses {
     truncation: z.enum(['auto', 'disabled']).nullish(), // defaults to 'disabled', 'auto' drops input items in the middle of the conversation.
     include: z.array(z.enum([
       'web_search_call.action.sources', // get web search citations
+      'code_interpreter_call.outputs', // get code execution logs and images
       // 'file_search_call.results',
       // 'message.input_image.image_url',
       // 'computer_call_output.output.image_url',
       // 'reasoning.encrypted_content',
-      // 'code_interpreter_call.outputs'
     ])).optional(), // additional output to include in the response
     user: z.string().optional(), // stable identifier for your end-users
 
@@ -1501,7 +1558,8 @@ export namespace OpenAIWire_API_Responses {
 
   export type Response = z.infer<typeof Response_schema>;
   export const Response_schema = z.object({
-    object: z.literal('response'),
+    object: z.literal('response')
+      .or(z.literal('chat.completion')), // [LiteLLM, 2026-01-30] Accept 'chat.completion' for proxy compatibility (should be 'response')
 
     id: z.string(), // unique ID for this response
     created_at: z.number(), // unix timestamp (in seconds)
@@ -1557,7 +1615,9 @@ export namespace OpenAIWire_API_Responses {
   // Response - Streaming Events
 
   const _BaseEvent_schema = z.object({
-    sequence_number: z.number(),
+    // [LiteLLM, 2026-01-29] Made optional to support proxies that don't pass through sequence numbers
+    // The parser will validate monotonicity once the first valid sequence_number is seen
+    sequence_number: z.number().optional(),
   });
 
   // Streaming > Response lifecycle
@@ -1702,20 +1762,22 @@ export namespace OpenAIWire_API_Responses {
     arguments: z.string(), // JSON string of the arguments to pass to the function
   });
 
-  // Streaming > Output Item: Custom Tool Call Input (plain text input)
 
-  // Custom tool events
-  // const OutputCustomToolCallInputDeltaEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.custom_tool_call_input.delta'),
-  //   delta: z.string(),
+  // Streaming > Tool invoke > Host File search events (OpenAI vector store - not implemented)
+
+  // const OutputFileSearchCallInProgressEvent_schema = _OutputIndexedEvent_schema.extend({
+  //   type: z.literal('response.file_search_call.in_progress'),
   // });
 
-  // const OutputCustomToolCallInputDoneEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.custom_tool_call_input.done'),
-  //   input: z.string(),
+  // const OutputFileSearchCallSearchingEvent_schema = _OutputIndexedEvent_schema.extend({
+  //   type: z.literal('response.file_search_call.searching'),
   // });
 
-  // Streaming > Output Item: Web Search Call
+  // const OutputFileSearchCallCompletedEvent_schema = _OutputIndexedEvent_schema.extend({
+  //   type: z.literal('response.file_search_call.completed'),
+  // });
+
+  // Streaming > Output Item: Host Web Search Call
 
   const OutputWebSearchCallInProgress_schema = _OutputIndexedEvent_schema.extend({
     type: z.literal('response.web_search_call.in_progress'),
@@ -1729,7 +1791,7 @@ export namespace OpenAIWire_API_Responses {
     type: z.literal('response.web_search_call.completed'),
   });
 
-  // Streaming > Tool invoke > Image generation events
+  // Streaming > Tool invoke > Host Image generation events
 
   const OutputImageGenerationCallInProgressEvent_schema = _OutputIndexedEvent_schema.extend({
     type: z.literal('response.image_generation_call.in_progress'),
@@ -1749,45 +1811,7 @@ export namespace OpenAIWire_API_Responses {
     type: z.literal('response.image_generation_call.completed'),
   });
 
-  // Streaming > Tool invoke > File search events (OpenAI vector store - not implemented)
-
-  // const OutputFileSearchCallInProgressEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.file_search_call.in_progress'),
-  // });
-
-  // const OutputFileSearchCallSearchingEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.file_search_call.searching'),
-  // });
-
-  // const OutputFileSearchCallCompletedEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.file_search_call.completed'),
-  // });
-
-  // Streaming > Tool invoke > Code interpreter events (basic implementation)
-
-  // const OutputCodeInterpreterCallInProgressEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.code_interpreter_call.in_progress'),
-  // });
-
-  // const OutputCodeInterpreterCallInterpretingEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.code_interpreter_call.interpreting'),
-  // });
-
-  // const OutputCodeInterpreterCallCompletedEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.code_interpreter_call.completed'),
-  // });
-
-  // const OutputCodeInterpreterCallCodeDeltaEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.code_interpreter_call_code.delta'),
-  //   delta: z.string(),
-  // });
-
-  // const OutputCodeInterpreterCallCodeDoneEvent_schema = _OutputIndexedEvent_schema.extend({
-  //   type: z.literal('response.code_interpreter_call_code.done'),
-  //   code: z.string(),
-  // });
-
-  // Streaming > Tool invoke > MCP events (basic implementation)
+  // Streaming > Tool invoke > Host MCP events (basic implementation)
 
   // const OutputMCPCallInProgressEvent_schema = _OutputIndexedEvent_schema.extend({
   //   type: z.literal('response.mcp_call.in_progress'),
@@ -1823,12 +1847,50 @@ export namespace OpenAIWire_API_Responses {
   //   type: z.literal('response.mcp_list_tools.failed'),
   // });
 
+  // Streaming > Tool invoke > Host Code interpreter events (xAI/OpenAI)
+
+  const OutputCodeInterpreterCallInProgressEvent_schema = _OutputIndexedEvent_schema.extend({
+    type: z.literal('response.code_interpreter_call.in_progress'),
+  });
+
+  const OutputCodeInterpreterCallInterpretingEvent_schema = _OutputIndexedEvent_schema.extend({
+    type: z.literal('response.code_interpreter_call.interpreting'),
+  });
+
+  const OutputCodeInterpreterCallCompletedEvent_schema = _OutputIndexedEvent_schema.extend({
+    type: z.literal('response.code_interpreter_call.completed'),
+  });
+
+  const OutputCodeInterpreterCallCodeDeltaEvent_schema = _OutputIndexedEvent_schema.extend({
+    type: z.literal('response.code_interpreter_call_code.delta'),
+    delta: z.string(), // partial code snippet being streamed
+  });
+
+  const OutputCodeInterpreterCallCodeDoneEvent_schema = _OutputIndexedEvent_schema.extend({
+    type: z.literal('response.code_interpreter_call_code.done'),
+    code: z.string(), // final code snippet
+  });
+
+  // Streaming > Output Item: Host Custom Tool Call Input (plain text input)
+
+  const OutputCustomToolCallInputDeltaEvent_schema = _OutputIndexedEvent_schema.extend({
+    type: z.literal('response.custom_tool_call_input.delta'),
+    delta: z.string(), // incremental input data
+  });
+
+  const OutputCustomToolCallInputDoneEvent_schema = _OutputIndexedEvent_schema.extend({
+    type: z.literal('response.custom_tool_call_input.done'),
+    input: z.string(), // complete input data
+  });
+
   // Streaming > Control? > Response queued
 
   // const ResponseQueuedEvent_schema = _BaseEvent_schema.extend({
   //   type: z.literal('response.queued'),
   //   response: Response_schema,
   // });
+
+  // [XAI] Streaming: TBA: https://docs.x.ai/docs/guides/tools/overview#tool-call-function-names-vs-usage-categories
 
   // Keepalive event - [OpenAI, 2025-01-13] sent periodically to keep the connection alive
   const KeepaliveEvent_schema = _BaseEvent_schema.extend({
@@ -1889,42 +1951,42 @@ export namespace OpenAIWire_API_Responses {
     FunctionCallArgumentsDeltaEvent_schema,
     FunctionCallArgumentsDoneEvent_schema,
 
-    // Tool invoke > Custom tool events
-    // OutputCustomToolCallInputDeltaEvent_schema,
-    // OutputCustomToolCallInputDoneEvent_schema,
+    // Host Tool invoke > File Search events
+    // OutputFileSearchCallInProgressEvent_schema, // OpenAI vector store - not implemented
+    // OutputFileSearchCallSearchingEvent_schema, // OpenAI vector store - not implemented
+    // OutputFileSearchCallCompletedEvent_schema, // OpenAI vector store - not implemented
 
-    // Tool invoke > Web search events
+    // Host Tool invoke > Web search events
     OutputWebSearchCallInProgress_schema,
     OutputWebSearchCallSearching_schema,
     OutputWebSearchCallCompleted_schema,
 
-    // Tool invoke > Image generation events
+    // Host Tool invoke > Image generation events
     OutputImageGenerationCallInProgressEvent_schema,
     OutputImageGenerationCallGeneratingEvent_schema,
     OutputImageGenerationCallPartialImageEvent_schema,
     OutputImageGenerationCallCompletedEvent_schema,
 
-    // Tool invoke > File Search events
-    // OutputFileSearchCallInProgressEvent_schema, // OpenAI vector store - not implemented
-    // OutputFileSearchCallSearchingEvent_schema, // OpenAI vector store - not implemented
-    // OutputFileSearchCallCompletedEvent_schema, // OpenAI vector store - not implemented
-
-    // Tool invoke > Code Interpreter events
-    // OutputCodeInterpreterCallInProgressEvent_schema,
-    // OutputCodeInterpreterCallInterpretingEvent_schema,
-    // OutputCodeInterpreterCallCompletedEvent_schema,
-    // OutputCodeInterpreterCallCodeDeltaEvent_schema,
-    // OutputCodeInterpreterCallCodeDoneEvent_schema,
-
-    // Tool invoke > MCP events
+    // Host Tool invoke > MCP events
+    // OutputMCPCallArgumentsDeltaEvent_schema,
+    // OutputMCPCallArgumentsDoneEvent_schema,
     // OutputMCPCallInProgressEvent_schema,
     // OutputMCPCallCompletedEvent_schema,
     // OutputMCPCallFailedEvent_schema,
-    // OutputMCPCallArgumentsDeltaEvent_schema,
-    // OutputMCPCallArgumentsDoneEvent_schema,
     // OutputMCPListToolsInProgressEvent_schema,
     // OutputMCPListToolsCompletedEvent_schema,
     // OutputMCPListToolsFailedEvent_schema,
+
+    // Host Tool invoke > Code Interpreter events (xAI/OpenAI)
+    OutputCodeInterpreterCallInProgressEvent_schema,
+    OutputCodeInterpreterCallInterpretingEvent_schema,
+    OutputCodeInterpreterCallCompletedEvent_schema,
+    OutputCodeInterpreterCallCodeDeltaEvent_schema,
+    OutputCodeInterpreterCallCodeDoneEvent_schema,
+
+    // Host Tool invoke > Custom Tool Call events (xAI x_search uses this)
+    OutputCustomToolCallInputDeltaEvent_schema,
+    OutputCustomToolCallInputDoneEvent_schema,
 
     // Error events
     ErrorEvent_schema,

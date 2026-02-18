@@ -7,10 +7,11 @@ import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
 import type { DLLMMaxOutputTokens } from '~/common/stores/llms/llms.types';
-import { DModelParameterId, DModelParameterRegistry, DModelParameterSpec, DModelParameterValues, FALLBACK_LLM_PARAM_RESPONSE_TOKENS, FALLBACK_LLM_PARAM_TEMPERATURE, getAllModelParameterValues } from '~/common/stores/llms/llms.parameters';
+import { DModelParameterId, DModelParameterRegistry, DModelParameterSpecAny, DModelParameterValues, FALLBACK_LLM_PARAM_RESPONSE_TOKENS, getAllModelParameterValues } from '~/common/stores/llms/llms.parameters';
 import { FormSelectControl } from '~/common/components/forms/FormSelectControl';
 import { FormSliderControl } from '~/common/components/forms/FormSliderControl';
 import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
+import { FormTextField } from '~/common/components/forms/FormTextField';
 import { InlineError } from '~/common/components/InlineError';
 import { useUIComplexityMode } from '~/common/stores/store-ui';
 import { webGeolocationRequest } from '~/common/util/webGeolocationUtils';
@@ -33,17 +34,17 @@ const _reasoningEffort4Options = [
   { value: _UNSPECIFIED, label: 'Default', description: 'Default value (unset)' } as const,
 ] as const;
 const _reasoningEffort52Options = [
-  { value: 'xhigh', label: 'Max', description: 'Hardest thinking, best quality' } as const,
+  { value: 'xhigh', label: 'X-High', description: 'Hardest thinking, best quality' } as const,
   { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
   { value: 'low', label: 'Low', description: 'Quick, concise responses' } as const,
-  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
+  { value: _UNSPECIFIED, label: 'None', description: 'Default (no reasoning)' } as const,
 ] as const;
 const _reasoningEffort52ProOptions = [
-  { value: 'xhigh', label: 'Max', description: 'Hardest thinking, best quality' } as const,
+  { value: 'xhigh', label: 'X-High', description: 'Hardest thinking, best quality' } as const,
   { value: 'high', label: 'High', description: 'Deep, thorough analysis' } as const,
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning depth' } as const,
-  { value: _UNSPECIFIED, label: 'Default', description: '-' } as const,
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default (medium)' } as const,
 ] as const;
 const _verbosityOptions = [
   { value: 'high', label: 'Detailed', description: 'Thorough responses, great for audits' } as const,
@@ -126,12 +127,6 @@ const _geminiThinkingLevel4Options = [
   { value: _UNSPECIFIED, label: 'Default', description: 'Model decides' },
 ] as const;
 
-const _xaiSearchModeOptions = [
-  { value: 'auto', label: 'Auto', description: 'Model decides (default)' },
-  { value: 'on', label: 'On', description: 'Always search active sources' },
-  { value: 'off', label: 'Off', description: 'Never perform a search' },
-] as const;
-
 const _antWebSearchOptions = [
   { value: 'auto', label: 'On', description: 'Enable web search for real-time information' },
   { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
@@ -143,9 +138,24 @@ const _antWebFetchOptions = [
 ] as const;
 
 const _antEffortOptions = [
-  { value: _UNSPECIFIED, label: 'High', description: 'Maximum capability (default)' },
+  { value: 'high', label: 'High', description: 'Maximum capability' },
   { value: 'medium', label: 'Medium', description: 'Balanced speed and quality' },
   { value: 'low', label: 'Low', description: 'Fastest, most efficient' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default value (High)' },
+] as const;
+
+const _antEffortMaxOptions = [
+  { value: 'max', label: 'Max', description: 'Deepest reasoning' },
+  { value: 'high', label: 'High', description: 'Maximum capability' },
+  { value: 'medium', label: 'Medium', description: 'Balanced' },
+  { value: 'low', label: 'Low', description: 'Most efficient' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default value (High)' },
+] as const;
+
+const _moonReasoningEffortOptions = [
+  { value: 'high', label: 'On', description: 'Multi-step reasoning' },
+  { value: 'none', label: 'Off', description: 'Disable thinking mode' },
+  { value: _UNSPECIFIED, label: 'Default', description: 'Default (On)' },
 ] as const;
 
 // const _moonshotWebSearchOptions = [
@@ -166,8 +176,33 @@ const _imageGenerationOptions = [
   // { value: 'hq_png', label: 'HD PNG', description: 'Uncompressed' }, // TODO: re-enable when uncompressed PNG saving is implemented
 ] as const;
 
-const _xaiDateFilterOptions = [
-  { value: 'unfiltered', label: 'All Time', description: 'No date restriction' },
+const _oaiCodeInterpreterOptions = [
+  { value: 'auto', label: 'On', description: 'Python code execution ($0.03/container)' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+
+// XAI
+
+const _xaiWebSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Real-time web results' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _xaiXSearchOptions = [
+  { value: 'auto', label: 'On', description: 'Active (Big-AGI default)' },
+  { value: 'off', label: 'Off', description: 'Disabled' },
+] as const;
+
+const _xaiCodeExecutionOptions = [
+  { value: 'auto', label: 'On', description: 'Server-side code execution' },
+  { value: _UNSPECIFIED, label: 'Off', description: 'Disabled (default)' },
+] as const;
+
+const _xaiSearchIntervalOptions = [
+  { value: _UNSPECIFIED, label: 'No Filter', description: 'No date restriction' },
+  // Note: the wire format also accepts 'unfiltered', but we use _UNSPECIFIED (undefined) for clarity - both are equivalent on the server
+  // { value: 'unfiltered', ... },
   { value: '1d', label: 'Last Day', description: 'Results from last 24 hours' },
   { value: '1w', label: 'Last Week', description: 'Results from last 7 days' },
   { value: '1m', label: 'Last Month', description: 'Results from last 30 days' },
@@ -179,7 +214,7 @@ const _xaiDateFilterOptions = [
 export function LLMParametersEditor(props: {
   // constants
   maxOutputTokens: DLLMMaxOutputTokens,
-  parameterSpecs: DModelParameterSpec<DModelParameterId>[],
+  parameterSpecs: DModelParameterSpecAny[],
   parameterOmitTemperature?: boolean,
   baselineParameters: DModelParameterValues,
 
@@ -201,21 +236,21 @@ export function LLMParametersEditor(props: {
   const defGemTB = DModelParameterRegistry['llmVndGeminiThinkingBudget'];
 
   // specs: whether a models supports a parameter
-  const modelParamSpec = React.useMemo(() => {
-    return Object.fromEntries(
-      (props.parameterSpecs ?? []).map(spec => [spec.paramId, spec]),
-    ) as Record<DModelParameterId, DModelParameterSpec<DModelParameterId>>;
-  }, [props.parameterSpecs]);
+  const modelParamSpec = React.useMemo(() =>
+      Object.fromEntries((props.parameterSpecs ?? []).map(spec => [spec.paramId, spec]))
+    , [props.parameterSpecs]);
 
 
   // current values: { ...fallback, ...baseline, ...user }
   const allParameters = getAllModelParameterValues(props.baselineParameters, props.parameters);
   const {
     llmResponseTokens = FALLBACK_LLM_PARAM_RESPONSE_TOKENS, // fallback for undefined, result is number | null
-    llmTemperature = FALLBACK_LLM_PARAM_TEMPERATURE, // fallback for undefined, result is number | null
+    llmTemperature, // null: no temperature, number: temperature value, undefined: shall not happen, we treat is similarly to null
     llmForceNoStream,
     llmVndAnt1MContext,
     llmVndAntEffort,
+    llmVndAntEffortMax,
+    llmVndAntInfSpeed,
     llmVndAntSkills,
     llmVndAntThinkingBudget,
     llmVndAntWebFetch,
@@ -229,6 +264,7 @@ export function LLMParametersEditor(props: {
     llmVndGeminiThinkingBudget,
     llmVndGeminiThinkingLevel,
     llmVndGeminiThinkingLevel4,
+    llmVndMoonReasoningEffort,
     // llmVndMoonshotWebSearch,
     llmVndOaiReasoningEffort,
     llmVndOaiReasoningEffort4,
@@ -238,18 +274,23 @@ export function LLMParametersEditor(props: {
     llmVndOaiWebSearchContext,
     llmVndOaiWebSearchGeolocation,
     llmVndOaiImageGeneration,
+    llmVndOaiCodeInterpreter,
     llmVndOaiVerbosity,
     llmVndOrtWebSearch,
     llmVndPerplexityDateFilter,
     llmVndPerplexitySearchMode,
-    llmVndXaiSearchMode,
-    llmVndXaiSearchSources,
-    llmVndXaiSearchDateFilter,
+
+    llmVndXaiCodeExecution,
+    llmVndXaiSearchInterval,
+    llmVndXaiWebSearch,
+    llmVndXaiXSearch,
+    llmVndXaiXSearchHandles,
+    llmVndZaiReasoningEffort,
   } = allParameters;
 
 
   // state (here because the initial state depends on props)
-  const tempAboveOne = llmTemperature !== null && llmTemperature > 1;
+  const tempAboveOne = llmTemperature !== null && llmTemperature !== undefined && llmTemperature > 1;
   const [overheat, setOverheat] = React.useState(tempAboveOne);
   const showOverheatButton = overheat || llmTemperature === 1 || tempAboveOne;
 
@@ -273,8 +314,12 @@ export function LLMParametersEditor(props: {
     return paramId in modelParamSpec && !modelParamSpec[paramId].hidden;
   }
 
-  const temperatureHide = showParam('llmVndAntThinkingBudget');
-  const antThinkingOff = llmVndAntThinkingBudget === null;
+  // Anthropic adaptive(-1)/extended(>1024) thinking disables temperature control
+  const _antThinkingDefined = 'llmVndAntThinkingBudget' in modelParamSpec;
+  const antThinkingEnabled = _antThinkingDefined && !!llmVndAntThinkingBudget; // both mullish mean "off"
+  const antThinkingEnabled_Adaptive = antThinkingEnabled && llmVndAntThinkingBudget === -1;
+  const antThinkingShown = _antThinkingDefined && !modelParamSpec['llmVndAntThinkingBudget'].hidden;
+
   const gemThinkingAuto = llmVndGeminiThinkingBudget === undefined;
   const gemThinkingOff = llmVndGeminiThinkingBudget === 0;
 
@@ -287,13 +332,23 @@ export function LLMParametersEditor(props: {
 
   return <>
 
-    {!temperatureHide && <FormSliderControl
-      title='Temperature' ariaLabel='Model Temperature'
-      description={llmTemperature === null ? 'Unsupported' : llmTemperature < 0.33 ? 'More strict' : llmTemperature > 1 ? 'Extra hot ♨️' : llmTemperature > 0.67 ? 'Larger freedom' : 'Creativity'}
-      disabled={props.parameterOmitTemperature}
-      min={0} max={overheat ? 2 : 1} step={0.1} defaultValue={0.5}
-      valueLabelDisplay={props.parameters?.llmTemperature !== undefined ? 'on' : 'auto'} // detect user-overridden or not
-      value={llmTemperature}
+    {!(props.simplified && props.parameterOmitTemperature) && <FormSliderControl
+      title={<span style={{ minWidth: 100 }}>Temperature</span>} ariaLabel='Model Temperature'
+      description={
+        antThinkingEnabled_Adaptive ? 'Off (adaptive)' : antThinkingEnabled ? 'Off (thinking)'
+          : llmTemperature === null ? 'Unsupported'
+            : llmTemperature === undefined ? 'Default'
+              : llmTemperature < 0.33 ? 'More strict'
+                : llmTemperature > 1 ? 'Extra hot ♨️'
+                  : llmTemperature > 0.67 ? 'Larger freedom' : 'Creativity'
+      }
+      disabled={props.parameterOmitTemperature /* set when LLM_IF_HOTFIX_NoTemperature */ || antThinkingEnabled}
+      min={0}
+      max={overheat ? 2 : 1}
+      step={0.1}
+      defaultValue={0.5 /* FIXME: this wasn't FALLBACK_LLM_PARAM_TEMPERATURE, but we shall not need this */}
+      valueLabelDisplay={props.parameters?.llmTemperature === undefined || antThinkingEnabled ? 'auto' : 'on'} // detect user-overridden or not
+      value={llmTemperature ?? (overheat ? [1, 1] : [0.5, 0.5]) /* null and undefined both would become undefined (uncontrolled) in the slider */}
       onChange={value => onChangeParameter({ llmTemperature: value })}
       endAdornment={
         <Tooltip arrow disableInteractive title={overheat ? 'Disable LLM Overheating' : 'Increase Max LLM Temperature to 2'} sx={{ p: 1 }}>
@@ -313,7 +368,7 @@ export function LLMParametersEditor(props: {
     ) : !props.simplified && (
       <Box sx={{ mr: 1 }}>
         <FormSliderControl
-          title='Output Tokens' ariaLabel='Model Max Tokens'
+          title={<span style={{ minWidth: 100 }}>Output Tokens</span>} ariaLabel='Model Max Tokens'
           description='Max Size'
           min={256} max={props.maxOutputTokens} step={256} defaultValue={1024}
           valueLabelDisplay={props.parameters?.llmResponseTokens !== undefined ? 'on' : 'auto'} // detect user-overridden or not
@@ -323,22 +378,22 @@ export function LLMParametersEditor(props: {
       </Box>
     )}
 
-    {showParam('llmVndAntThinkingBudget') && (
+    {antThinkingShown && (
       <FormSliderControl
-        title='Thinking Budget' ariaLabel='Anthropic Extended Thinking Token Budget'
+        title={antThinkingEnabled ? 'Thinking Budget' : 'Disabled'} ariaLabel='Anthropic Extended Thinking Token Budget'
         description='Tokens'
         min={defAntTB.range[0]} max={defAntTB.range[1]} step={1024}
-        valueLabelDisplay={antThinkingOff ? 'off' : 'on'}
+        valueLabelDisplay={antThinkingEnabled ? 'on' : 'off'}
         value={llmVndAntThinkingBudget ?? 0}
-        disabled={antThinkingOff}
+        disabled={!antThinkingEnabled}
         onChange={value => onChangeParameter({ llmVndAntThinkingBudget: value })}
         endAdornment={
-          <Tooltip arrow disableInteractive title={antThinkingOff ? 'Enable Thinking' : 'Disable Thinking'}>
+          <Tooltip arrow disableInteractive title={antThinkingEnabled ? 'Disable Thinking' : 'Enable Thinking'}>
             <IconButton
-              variant={antThinkingOff ? 'solid' : 'outlined'}
-              onClick={() => antThinkingOff
-                ? onRemoveParameter('llmVndAntThinkingBudget')
-                : onChangeParameter({ llmVndAntThinkingBudget: null })
+              variant={antThinkingEnabled ? 'outlined' : 'solid'}
+              onClick={() => antThinkingEnabled
+                ? onChangeParameter({ llmVndAntThinkingBudget: null })
+                : onRemoveParameter('llmVndAntThinkingBudget')
               }
               sx={{ ml: 2 }}
             >
@@ -349,13 +404,26 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndAntEffortMax') && (
+      <FormSelectControl
+        title='Effort'
+        tooltip='Controls thinking depth. Max = deepest reasoning with no constraints. High = default capability. Low = fastest, most efficient.'
+        value={llmVndAntEffortMax ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndAntEffortMax');
+          else onChangeParameter({ llmVndAntEffortMax: value });
+        }}
+        options={_antEffortMaxOptions}
+      />
+    )}
+
     {showParam('llmVndAntEffort') && (
       <FormSelectControl
         title='Effort'
         tooltip='Controls token usage vs. thoroughness. Low = fastest, most efficient. High = maximum capability (default). Works alongside thinking budget.'
         value={llmVndAntEffort ?? _UNSPECIFIED}
         onChange={(value) => {
-          if (value === _UNSPECIFIED || !value || value === 'high') onRemoveParameter('llmVndAntEffort');
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndAntEffort');
           else onChangeParameter({ llmVndAntEffort: value });
         }}
         options={_antEffortOptions}
@@ -397,6 +465,20 @@ export function LLMParametersEditor(props: {
         onChange={checked => {
           if (!checked) onRemoveParameter('llmVndAnt1MContext');
           else onChangeParameter({ llmVndAnt1MContext: true });
+        }}
+      />
+    )}
+
+    {/* Anthropic Fast Mode - currently hidden via parameterSpec.hidden */}
+    {showParam('llmVndAntInfSpeed') && (
+      <FormSwitchControl
+        title='Fast Mode (Preview)'
+        description={llmVndAntInfSpeed === 'fast' ? 'Fast - 6x pricing ⚠️' : 'Standard (default)'}
+        tooltip='Accelerated inference (~2.5x faster output) at 6x pricing. Preview access required.'
+        checked={llmVndAntInfSpeed === 'fast'}
+        onChange={(checked) => {
+          if (!checked) onRemoveParameter('llmVndAntInfSpeed');
+          else onChangeParameter({ llmVndAntInfSpeed: 'fast' });
         }}
       />
     )}
@@ -546,6 +628,19 @@ export function LLMParametersEditor(props: {
     )}
 
 
+    {showParam('llmVndMoonReasoningEffort') && (
+      <FormSelectControl
+        title='Thinking'
+        tooltip='Enable extended multi-step reasoning for Kimi K2.5'
+        value={llmVndMoonReasoningEffort ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndMoonReasoningEffort');
+          else onChangeParameter({ llmVndMoonReasoningEffort: value });
+        }}
+        options={_moonReasoningEffortOptions}
+      />
+    )}
+
     {/*{showParam('llmVndMoonshotWebSearch') && (*/}
     {/*  <FormSelectControl*/}
     {/*    title='Web Search'*/}
@@ -558,6 +653,19 @@ export function LLMParametersEditor(props: {
     {/*    options={_moonshotWebSearchOptions}*/}
     {/*  />*/}
     {/*)}*/}
+
+    {showParam('llmVndZaiReasoningEffort') && (
+      <FormSelectControl
+        title='Thinking'
+        tooltip='Enable thinking mode for GLM models'
+        value={llmVndZaiReasoningEffort ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndZaiReasoningEffort');
+          else onChangeParameter({ llmVndZaiReasoningEffort: value });
+        }}
+        options={_moonReasoningEffortOptions}
+      />
+    )}
 
     {showParam('llmVndPerplexitySearchMode') && (
       <FormSelectControl
@@ -711,6 +819,21 @@ export function LLMParametersEditor(props: {
       />
     )}
 
+    {showParam('llmVndOaiCodeInterpreter') && (
+      <FormSelectControl
+        title='Code Interpreter'
+        tooltip='Enable Python code execution in a sandboxed container. Costs $0.03 per container (expires after 20 minutes of inactivity).'
+        value={llmVndOaiCodeInterpreter ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value)
+            onRemoveParameter('llmVndOaiCodeInterpreter');
+          else
+            onChangeParameter({ llmVndOaiCodeInterpreter: value });
+        }}
+        options={_oaiCodeInterpreterOptions}
+      />
+    )}
+
     {showParam('llmVndOaiRestoreMarkdown') && (
       <FormSwitchControl
         title='Restore Markdown'
@@ -729,8 +852,8 @@ export function LLMParametersEditor(props: {
     {showParam('llmForceNoStream') && (
       <FormSwitchControl
         title='Disable Streaming'
-        description='Receive complete responses'
-        tooltip='Turn on to get entire responses at once. Useful for models with streaming issues, but will make responses appear slower.'
+        description='For unverified OpenAI orgs'
+        tooltip='Disables streaming and reasoning summaries, which both require OpenAI organization verification. Enable if you get verification errors with GPT-5 models.'
         checked={!!llmForceNoStream}
         onChange={checked => {
           if (!checked)
@@ -756,59 +879,64 @@ export function LLMParametersEditor(props: {
     )}
 
 
-    {showParam('llmVndXaiSearchMode') && (
+    {showParam('llmVndXaiCodeExecution') && (
       <FormSelectControl
-        title='Search Mode'
-        tooltip='Controls when to search'
-        value={llmVndXaiSearchMode ?? 'auto'}
-        onChange={value => onChangeParameter({ llmVndXaiSearchMode: value })}
-        options={_xaiSearchModeOptions}
+        title='Run Code'
+        value={llmVndXaiCodeExecution ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndXaiCodeExecution');
+          else onChangeParameter({ llmVndXaiCodeExecution: value });
+        }}
+        options={_xaiCodeExecutionOptions}
       />
     )}
 
-    {showParam('llmVndXaiSearchSources') && (
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, ml: 0 }}>
-        {[
-          { key: 'web', label: 'Web Search', description: 'Search websites' },
-          { key: 'x', label: 'X Posts', description: 'Search X posts' },
-          { key: 'news', label: 'News', description: 'Search news' },
-        ].map(({ key, label, description }) => {
-          const currentSources = llmVndXaiSearchSources?.split(',').map(s => s.trim()).filter(Boolean) || [];
-          const isEnabled = currentSources.includes(key);
-          const searchIsOff = llmVndXaiSearchMode === 'off';
-
-          return (
-            <FormSwitchControl
-              key={key}
-              title={label}
-              description={description}
-              checked={isEnabled}
-              disabled={searchIsOff}
-              onChange={checked => {
-                const newSources = currentSources.filter(s => s !== key);
-                if (checked) newSources.push(key);
-                const newValue = newSources.length > 0 ? newSources.join(',') : undefined;
-                onChangeParameter({ llmVndXaiSearchSources: newValue || 'web,x' });
-              }}
-            />
-          );
-        })}
-      </Box>
+    {showParam('llmVndXaiWebSearch') && (
+      <FormSelectControl
+        title='Web Search'
+        value={llmVndXaiWebSearch ?? _UNSPECIFIED}
+        onChange={(value) => {
+          if (value === _UNSPECIFIED || !value || value === 'off') onRemoveParameter('llmVndXaiWebSearch');
+          else onChangeParameter({ llmVndXaiWebSearch: value });
+        }}
+        options={_xaiWebSearchOptions}
+      />
     )}
 
-    {showParam('llmVndXaiSearchDateFilter') && (
+    {showParam('llmVndXaiXSearch') && (
       <FormSelectControl
-        title='Search Period'
-        // tooltip='Recency of search results'
-        disabled={llmVndXaiSearchMode === 'off'}
-        value={llmVndXaiSearchDateFilter ?? 'unfiltered'}
+        title='X Search'
+        value={llmVndXaiXSearch ?? 'off'}
+        onChange={(value) => onChangeParameter({ llmVndXaiXSearch: value /* we don't remove because there's a default to this param, so we must user-override it */ })}
+        options={_xaiXSearchOptions}
+      />
+    )}
+
+    {showParam('llmVndXaiSearchInterval') && (
+      <FormSelectControl
+        title='X Search Period'
+        disabled={llmVndXaiXSearch !== 'auto'}
+        value={llmVndXaiSearchInterval ?? _UNSPECIFIED}
         onChange={(value) => {
-          if (value === 'unfiltered' || !value)
-            onRemoveParameter('llmVndXaiSearchDateFilter');
-          else
-            onChangeParameter({ llmVndXaiSearchDateFilter: value });
+          if (value === _UNSPECIFIED || !value) onRemoveParameter('llmVndXaiSearchInterval');
+          else onChangeParameter({ llmVndXaiSearchInterval: value });
         }}
-        options={_xaiDateFilterOptions}
+        options={_xaiSearchIntervalOptions}
+      />
+    )}
+
+    {showParam('llmVndXaiXSearchHandles') && llmVndXaiXSearch === 'auto' && (
+      <FormTextField
+        autoCompleteId='xai-x-handles'
+        title='X Search Handles'
+        description='Optional filter'
+        placeholder='@user1, @user2'
+        value={llmVndXaiXSearchHandles ?? ''}
+        onChange={(value) => {
+          if (!value.trim()) onRemoveParameter('llmVndXaiXSearchHandles');
+          else onChangeParameter({ llmVndXaiXSearchHandles: value });
+        }}
+        inputSx={{ maxWidth: 220 }}
       />
     )}
 

@@ -166,6 +166,8 @@ export function LLMAttachmentMenu(props: {
       minWidth={260}
       noTopPadding
       placement='top'
+      placementOffset={[0, 15]}
+      boxShadow='lg'
       zIndex={themeZIndexOverMobileDrawer /* was not set, but the Attachment Menu can be used from the Personas Modal */}
     >
 
@@ -196,9 +198,10 @@ export function LLMAttachmentMenu(props: {
         <ListItem sx={{ fontSize: 'sm', my: 0.75 }}>
           Attach {draftSource.media === 'url' ? 'web page'
           : draftSource.media === 'file' ? 'file'
-            : draftSource.media === 'text'
-              ? (draftSource.method === 'drop' ? 'drop' : draftSource.method === 'clipboard-read' ? 'clipboard' : draftSource.method === 'paste' ? 'paste' : '')
-              : ''} as:
+            : draftSource.media === 'cloud' ? 'cloud file'
+              : draftSource.media === 'text'
+                ? (draftSource.method === 'drop' ? 'drop' : draftSource.method === 'clipboard-read' ? 'clipboard' : draftSource.method === 'paste' ? 'paste' : '')
+                : ''} as:
           {uiComplexityMode === 'extra' && (
             <Chip component='span' size='sm' color='neutral' variant='outlined' startDecorator={<ContentCopyIcon />} onClick={(event) => handleCopyLabelToClipboard(event, draft.label)} sx={{ ml: 'auto' }}>
               copy name

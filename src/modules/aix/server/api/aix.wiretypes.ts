@@ -186,7 +186,7 @@ export namespace AixWire_Parts {
 
   const _CodeExecutionInvocation_schema = z.object({
     type: z.literal('code_execution'),
-    variant: z.literal('gemini_auto_inline').optional(),
+    variant: z.enum(['gemini_auto_inline', 'code_interpreter']).optional(),
     language: z.string().optional(),
     code: z.string(),
   });
@@ -360,7 +360,7 @@ export namespace AixWire_Tooling {
      * For now we are supporting a single provider:
      * - gemini_auto_inline: Google Gemini, auto-invoked, and inline (runs the code and goes back to the model to continue the generation)
      */
-    variant: z.enum(['gemini_auto_inline']),
+    variant: z.enum(['gemini_auto_inline', 'code_interpreter']),
   });
 
   /// Tool Definition
@@ -451,9 +451,10 @@ export namespace AixWire_API {
 
     // Anthropic
     vndAnt1MContext: z.boolean().optional(),
-    vndAntEffort: z.enum(['low', 'medium', 'high']).optional(),
+    vndAntEffort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+    vndAntInfSpeed: z.enum(['fast']).optional(),
     vndAntSkills: z.string().optional(),
-    vndAntThinkingBudget: z.number().nullable().optional(),
+    vndAntThinkingBudget: z.number().or(z.literal('adaptive')).nullable().optional(),
     vndAntToolSearch: z.enum(['regex', 'bm25']).optional(), // Tool Search Tool variant
     vndAntWebFetch: z.enum(['auto']).optional(),
     vndAntWebSearch: z.enum(['auto']).optional(),
@@ -472,29 +473,33 @@ export namespace AixWire_API {
     // Moonshot
     vndMoonshotWebSearch: z.enum(['auto']).optional(),
     // OpenAI
+    vndOaiCodeInterpreter: z.enum(['off', 'auto']).optional(),
+    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
     vndOaiResponsesAPI: z.boolean().optional(),
     vndOaiReasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+    vndOaiReasoningSummary: z.enum(['none', 'detailed']).optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
     vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
     vndOaiWebSearchContext: z.enum(['low', 'medium', 'high']).optional(),
-    vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
     // OpenRouter
     vndOrtWebSearch: z.enum(['auto']).optional(),
     // Perplexity
     vndPerplexityDateFilter: z.enum(['unfiltered', '1m', '3m', '6m', '1y']).optional(),
     vndPerplexitySearchMode: z.enum(['default', 'academic']).optional(),
     // xAI
-    vndXaiSearchMode: z.enum(['auto', 'on', 'off']).optional(),
-    vndXaiSearchSources: z.string().optional(),
-    vndXaiSearchDateFilter: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
+    vndXaiCodeExecution: z.enum(['off', 'auto']).optional(),
+    vndXaiSearchInterval: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
+    vndXaiWebSearch: z.enum(['off', 'auto']).optional(),
+    vndXaiXSearch: z.enum(['off', 'auto']).optional(),
+    vndXaiXSearchHandles: z.string().optional(),
     /**
      * [OpenAI, 2025-03-11] This is the generic version of the `web_search_options.user_location` field
      * This AIX field mimics on purpose: https://platform.openai.com/docs/api-reference/chat/create
      */
     userGeolocation: z.object({
       city: z.string().optional(),      // free text input for the city of the user, e.g. San Francisco.
-      country: z.string().optional(),   // two-letter ISO country code of the user, e.g. US
       region: z.string().optional(),    // free text input for the reg. of the user the user, e.g. California
+      country: z.string().optional(),   // two-letter ISO country code of the user, e.g. US
       timezone: z.string().optional(),  // IANA timezone of the user, e.g. America/Los_Angeles
     }).optional(),
   });
@@ -563,6 +568,11 @@ export namespace AixWire_API {
     debugProfilePerformance: z.boolean().optional(),
 
     /**
+     * Applies a JSON override to the dispatch request body.
+     */
+    debugRequestBodyOverride: z.record(z.string(), z.unknown()).optional(),
+
+    /**
      * Request a resumable connection, if the model/service supports it.
      * - enables response storage for resumability (first found in the OpenAI Responses API)
      */
@@ -629,30 +639,29 @@ export namespace AixWire_Particles {
 
   export type ChatControlOp =
   // | { cg: 'start' } // not really used for now
-    | { cg: 'end', reason: CGEndReason, tokenStopReason: GCTokenStopReason }
+    | { cg: 'end', terminationReason: CGEndReason /* we know why we're sending 'end' */, tokenStopReason?: GCTokenStopReason /* we may or not have gotten a logical token stop reason from the dispatch */ }
     | { cg: 'issue', issueId: CGIssueId, issueText: string }
     | { cg: 'retry-reset', rScope: 'srv-dispatch' | 'srv-op' | 'cli-ll', rShallClear: boolean, reason: string, attempt: number, maxAttempts: number, delayMs: number, causeHttp?: number, causeConn?: string }
     | { cg: 'set-metrics', metrics: CGSelectMetrics }
     | { cg: 'set-model', name: string }
+    | { cg: 'set-provider-infra', label: string }
     | { cg: 'set-upstream-handle', handle: { uht: 'vnd.oai.responses', responseId: string, expiresAt: number | null } }
     | { cg: '_debugDispatchRequest', security: 'dev-env', dispatchRequest: { url: string, headers: string, body: string, bodySize: number } } // may generalize this in the future
     | { cg: '_debugProfiler', measurements: Record<string, number | string>[] };
 
   export type CGEndReason =     // the reason for the end of the chat generation
-    | 'abort-client'            // user aborted before the end of stream
     | 'done-dialect'            // OpenAI signals the '[DONE]' event, or Anthropic sends the 'message_stop' event
     | 'done-dispatch-aborted'   // this shall never see the light of day, as it was a reaction to the intake being aborted first
-    | 'done-dispatch-closed'    // dispatch connection closed
+    | 'done-dispatch-closed'    // dispatch connection closed, which is not a 'good' ending reason, as logic should have ended it with done-dialect/issue-dialect
     | 'issue-dialect'           // [1] ended because a dispatch encountered an issue, such as out-of-tokens, recitation, etc.
-    | 'issue-rpc';              // [2] ended because of an issue
+    | 'issue-dispatch-rpc';     // [2] ended because of an issue
 
   export type CGIssueId =
     | 'dialect-issue'           // [1] when end reason = 'issue-dialect'
-    | 'dispatch-prepare'        // [2] when end reason = 'issue-rpc', 4 phases of GC dispatch
+    | 'dispatch-prepare'        // [2] when end reason = 'issue-dispatch-rpc', 4 phases of GC dispatch
     | 'dispatch-fetch'          // [2] "
     | 'dispatch-read'           // [2] "
-    | 'dispatch-parse'          // [2] "
-    | 'client-read';            // the aix client encountered an unexpected error (e.g. tRPC)
+    | 'dispatch-parse';         // [2] "
 
   export type GCTokenStopReason =
     | 'ok'                      // clean, including reaching 'stop sequences'
@@ -660,7 +669,6 @@ export namespace AixWire_Particles {
     | 'ok-pause_continue'       // clean, but paused (e.g. Anthropic server tools like web search) - requires continuation
     // premature:
     | 'cg-issue'                // [1][2] chat-generation issue (see CGIssueId, mostly a dispatch or dialect issue)
-    | 'client-abort-signal'     // the client aborted - likely a user/auto initiation
     | 'filter-content'          // content filter (e.g. profanity)
     | 'filter-recitation'       // recitation filter (e.g. recitation)
     | 'filter-refusal'          // safety refusal filter (e.g. Anthropic safety concerns)
@@ -710,8 +718,8 @@ export namespace AixWire_Particles {
     // | { p: '_di', i_text: string }
     | { p: 'fci', id: string, name: string, i_args?: string /* never undefined */ }
     | { p: '_fci', _args: string }
-    | { p: 'cei', id: string, language: string, code: string, author: 'gemini_auto_inline' }
-    | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline', environment: DMessageToolResponsePart['environment'] }
+    | { p: 'cei', id: string, language: string, code: string, author: 'gemini_auto_inline' | 'code_interpreter' }
+    | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline' | 'code_interpreter', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
     | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string } // inline image, complete
     | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp
