@@ -27,11 +27,11 @@ export function BlockPartText_AutoBlocks(props: {
   isMobile: boolean,
   fitScreen: boolean,
   disableMarkdownText: boolean,
-  enhanceCodeBlocks: boolean,
   renderAsWordsDiff?: WordsDiff,
 
   showUnsafeHtmlCode?: boolean,
   optiAllowSubBlocksMemo: boolean,
+  optiStreamingLastFragment?: boolean,
 
   onContextMenu?: (event: React.MouseEvent) => void;
   onDoubleClick?: (event: React.MouseEvent) => void;
@@ -75,9 +75,10 @@ export function BlockPartText_AutoBlocks(props: {
       isMobile={props.isMobile}
       showUnsafeHtmlCode={props.showUnsafeHtmlCode}
       renderAsWordsDiff={props.renderAsWordsDiff}
-      codeRenderVariant={props.enhanceCodeBlocks ? 'enhanced' : 'outlined'}
+      codeRenderVariant='enhanced' // was: { props.enhanceCodeBlocks ? 'enhanced' : 'outlined' }
       textRenderVariant={props.disableMarkdownText ? 'text' : 'markdown'}
       optiAllowSubBlocksMemo={props.optiAllowSubBlocksMemo}
+      optiStreamingLastFragment={props.optiStreamingLastFragment}
       onContextMenu={props.onContextMenu}
       onDoubleClick={props.onDoubleClick}
       setText={!props.setEditedText ? undefined : handleSetText}

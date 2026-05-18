@@ -2,7 +2,7 @@ import { hasGoogleAnalytics, sendGAEvent } from '~/common/components/3rdparty/Go
 
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { DLLM, DLLMId, DModelInterfaceV1, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
-import { applyModelParameterSpecsInitialValues, DModelParameterSpecAny, FALLBACK_LLM_PARAM_TEMPERATURE } from '~/common/stores/llms/llms.parameters';
+import { applyModelParameterSpecsInitialValues, DModelParameterSpecAny, LLMImplicitParametersRuntimeFallback } from '~/common/stores/llms/llms.parameters';
 import { isLLMChatPricingFree } from '~/common/stores/llms/llms.pricing';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 
@@ -17,6 +17,12 @@ import { findServiceAccessOrThrow } from './vendors/vendor.helpers';
  * When this prefix is used, then the variant ID will not be prefixed with a dash.
  */
 export const LLMS_VARIANT_SEPARATOR = '::' as const;
+
+// Cap for the *initial* llmResponseTokens default to avoid runaway defaults on huge-context models.
+// The model's maxOutputTokens is unchanged (vendor-reported cap remains true); users can still raise
+// llmResponseTokens via the slider up to maxOutputTokens. On reset, this capped initial is used.
+const _INITIAL_RESPONSE_TOKENS_CAP = 128_000;
+
 
 function _clientIdWithVariant(id: string, idVariant?: string): string {
   return !idVariant ? id
@@ -86,8 +92,9 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
   const contextTokens = d.contextWindow || null;
   const maxOutputTokens = d.maxCompletionTokens || (contextTokens ? Math.round(contextTokens / 2) : null); // fallback to half context window
 
-  // initial (user overridable) response tokens setting: equal to the max, if the max is given, or to 1/8th of the context window (when max is set to 1/2 of context)
-  const llmResponseTokens = !maxOutputTokens ? null : !d.maxCompletionTokens ? Math.round(maxOutputTokens / 4) : d.maxCompletionTokens;
+  // initial (user overridable) response tokens setting: equal to the max, if the max is given, or to 1/8th of the context window (when max is set to 1/2 of context); clamped to cap
+  const llmResponseTokens = !maxOutputTokens ? null
+    : Math.min(d.maxCompletionTokens ?? Math.round(maxOutputTokens / 4), _INITIAL_RESPONSE_TOKENS_CAP);
 
 
   // DLLM is a fundamental type in our application
@@ -100,6 +107,7 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
     label: d.label,
     created: d.created || 0,
     updated: d.updated || 0,
+    ...(d.pubDate && { pubDate: d.pubDate }),
     description: d.description,
     hidden: !!d.hidden,
 
@@ -120,7 +128,7 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
       llmTemperature: // number | null
         d.interfaces.includes(LLM_IF_HOTFIX_NoTemperature) ? null
           : d.initialTemperature !== undefined ? d.initialTemperature
-            : FALLBACK_LLM_PARAM_TEMPERATURE,
+            : LLMImplicitParametersRuntimeFallback.llmTemperature,
     },
 
     // references

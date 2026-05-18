@@ -11,6 +11,7 @@ import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String } fro
 
 // configuration
 const OPENAI_RESPONSES_DEFAULT_TRUNCATION: TRequest['truncation'] = undefined;
+export const AIX_OAI_DEFAULT_IMAGE_GEN_MODEL: Exclude<Extract<TRequestTool, { type: 'image_generation' }>['model'], undefined> = 'gpt-image-2';
 
 
 type TRequest = OpenAIWire_API_Responses.Request;
@@ -37,11 +38,13 @@ export function aixToOpenAIResponses(
   const chatGenerate = aixSpillSystemToUser(_chatGenerate);
 
   // [OpenAI] Vendor-specific model checks
-  const isOpenAIOFamily = ['gpt-6', 'gpt-5', 'o4', 'o3', 'o1'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
-  const isOpenAIChatGPT = ['gpt-5-chat'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
   const isOpenAIComputerUse = model.id.includes('computer-use');
 
-  const hotFixNoTemperature = isOpenAIOFamily && !isOpenAIChatGPT;
+  // NOTE: we do not use this anymore - LLM_IF_HOTFIX_NoTemperature works in definition, UI, and client calls
+  // const isOpenAIOFamily = ['gpt-6', 'gpt-5', 'o4', 'o3', 'o1'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
+  // const isOpenAIChatGPT = ['gpt-5-chat'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
+  const forceNoTemperature = false;  // isOpenAIOFamily && !isOpenAIChatGPT;
+
   const hotFixNoTruncateAuto = isOpenAIComputerUse;
 
   const isDialectAzure = openAIDialect === 'azure';
@@ -61,7 +64,7 @@ export function aixToOpenAIResponses(
     // Model configuration
     model: model.id,
     max_output_tokens: model.maxTokens ?? undefined, // response if unset: null
-    temperature: !hotFixNoTemperature ? model.temperature ?? undefined : undefined,
+    temperature: !forceNoTemperature ? model.temperature ?? undefined : undefined,
     // top_p: ... below (alternative to temperature)
 
     // Input
@@ -73,12 +76,8 @@ export function aixToOpenAIResponses(
     tool_choice: chatGenerate.toolsPolicy && _toOpenAIResponsesToolChoice(chatGenerate.toolsPolicy),
     // parallel_tool_calls: undefined, // response if unset: true
 
-    // Operations Config
-    reasoning: !model.vndOaiReasoningEffort ? undefined : {
-      effort: model.vndOaiReasoningEffort,
-      // 'none' = omit (for unverified orgs), 'detailed' = explicit, undefined = default per model
-      ...(model.vndOaiReasoningSummary !== 'none' ? { summary: model.vndOaiReasoningSummary } : {}),
-    },
+    // Operations Config - use unified effort, fall back to deprecated field
+    // reasoning: ... below
 
     // Output Config
     // text: ... below
@@ -116,6 +115,32 @@ export function aixToOpenAIResponses(
       },
     };
 
+
+  // Reasoning
+  const reasoningEffort = model.reasoningEffort; // ?? model.vndOaiReasoningEffort;
+  if (reasoningEffort === 'max') // domain validation
+    throw new Error(`OpenAI Responses API does not support '${reasoningEffort}' reasoning effort`);
+
+  if (reasoningEffort) {
+    payload.reasoning = {
+      effort: reasoningEffort,
+    };
+    // include detailed reasoning summaries, unless the user has asked to bypass the OpenAI Org verification (via the forceNoStream flag)
+    const specialExclusions = [
+      'o1-pro', // found manually: unsupported parameter: 'reasoning.summary' is not supported with the 'o1-pro-2025-03-19' model
+    ].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
+    if (reasoningEffort !== 'none' && !model.forceNoStream && !specialExclusions)
+      payload.reasoning.summary = 'detailed';
+  }
+
+  // ALWAYS REQUEST Reasoning items: always include encrypted_content if there's any reasoning done; we had this inside the
+  // former block, but models can reason even if reasoningEffort === undefined;
+  if (!payload.store && reasoningEffort !== 'none') {
+    const includes = new Set(payload.include);
+    includes.add('reasoning.encrypted_content');
+    payload.include = Array.from(includes);
+  }
+
   // GPT-5 Verbosity: Add to existing text config or create new one
   if (model.vndOaiVerbosity) {
     payload.text = {
@@ -142,15 +167,17 @@ export function aixToOpenAIResponses(
       // [2025-11-18] Azure OpenAI still doesn't support web search tool yet - confirmed
       // [2025-09-12] Azure OpenAI doesn't support web search tool yet, and we also remove the "parameter" so we shall not come here
       console.log('[DEV] Azure OpenAI Responses: skipping web search tool due to Azure limitations');
-    } else if (payload.reasoning?.effort === 'minimal') {
-      // Web search is not supported when the reasoning effort is 'minimal'
+    } else if (reasoningEffort === 'minimal') {
+      // 2026-02-17: Validated: Web search is not supported when the reasoning effort is 'minimal'
       // console.log('[DEV] OpenAI Responses: skipping web search tool due to reasoning effort being set to minimal');
     } else {
 
       // Add the web search tool to the request
       if (!payload.tools?.length)
         payload.tools = [];
-      const webSearchTool: TRequestTool = {
+      const webSearchTool: TRequestTool = model.id.includes('-deep-research') ? {
+        type: 'web_search_preview', // HOTFIX for deep research models, which only seem to support the outdated 'web_search_preview' tool
+      } : {
         type: 'web_search',
         search_context_size: model.vndOaiWebSearchContext ?? undefined,
         user_location: model.userGeolocation && {
@@ -189,6 +216,7 @@ export function aixToOpenAIResponses(
     const imageMode = model.vndOaiImageGeneration;
     const imageGenerationTool: Extract<TRequestTool, { type: 'image_generation' }> = {
       type: 'image_generation',
+      ...(AIX_OAI_DEFAULT_IMAGE_GEN_MODEL && { model: AIX_OAI_DEFAULT_IMAGE_GEN_MODEL }),
       ...(imageMode === 'mq' ? { quality: 'medium' } : { /* quality: 'high' -- auto */ }),
       // ...(imageMode === 'hq' ? ... auto ... ),
       ...(imageMode === 'hq_edit' && { input_fidelity: 'high' }),
@@ -274,11 +302,12 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
 
 
   // We decide to adopt these schemas for the conversion (API gives us a few choices)
-  const chatMessages: (UserMessage | ModelMessage | FunctionCallMessage | FunctionCallOutputMessage)[] = [];
+  const chatMessages: (UserMessage | ModelMessage | FunctionCallMessage | FunctionCallOutputMessage | ReasoningMessage)[] = [];
   type UserMessage = Omit<OpenAIWire_Responses_Items.UserItemMessage, 'role'> & { role: 'user' };
   type ModelMessage = Extract<OpenAIWire_Responses_Items.InputMessage_Compat, { role: 'assistant' }>;
   type FunctionCallMessage = OpenAIWire_Responses_Items.OutputFunctionCallItem;
   type FunctionCallOutputMessage = OpenAIWire_Responses_Items.FunctionToolCallOutput;
+  type ReasoningMessage = OpenAIWire_Responses_Items.OutputReasoningItem;
 
   let allowUserAppend = true;
 
@@ -317,6 +346,20 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
       call_id: callId,
       name: functionName,
       arguments: functionArguments,
+    };
+    chatMessages.push(newMessage);
+    return newMessage;
+  }
+
+  function newReasoningMessage(itemId: string | undefined, encryptedContent: string | undefined) {
+    // Stateless multi-turn continuity: echo a reasoning item back so the model can resume its prior
+    // thought KV state. In stateful mode (store=true + previous_response_id) the id alone is enough;
+    // in stateless mode (our default) the encrypted_content is what the provider actually decodes.
+    const newMessage: ReasoningMessage = {
+      type: 'reasoning',
+      ...(itemId ? { id: itemId } : {}),
+      summary: [], // display-only, never part of the continuity contract
+      ...(encryptedContent ? { encrypted_content: encryptedContent } : {}),
     };
     chatMessages.push(newMessage);
     return newMessage;
@@ -451,7 +494,33 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
               break;
 
             case 'ma':
-              // TODO: support this in the future - may contain the encrypted reasoning data, although we don't parse this yet
+              // Preserve reasoning continuity across turns via _vnd.openai.reasoningItem (set by openai.responses.parser).
+              // Round-trip ONLY when both encrypted_content AND id are present (canonical, complete handle).
+              // - bare id without EC -> 404 "Item with id rs_... not found" in stateless mode
+              // - bare EC without id -> torn handle, undefined behavior across providers/versions
+              // Defense-in-depth: matches the parser's capture gate; rejects torn handles even if any sneak through.
+              // ma fragments without an openai handle are common (e.g., DeepSeek reasoning_content emits ma fragments
+              // with no continuity blob) - skip without warning to avoid log noise on cross-vendor history.
+              const oaiReasoning = modelPart._vnd?.openai?.reasoningItem;
+              if (oaiReasoning?.encryptedContent && oaiReasoning?.id)
+                newReasoningMessage(oaiReasoning.id, oaiReasoning.encryptedContent);
+              break;
+
+            case 'tool_response':
+              const toolResponseType = modelPart.response.type;
+              switch (toolResponseType) {
+                case 'function_call':
+                  const { result: functionCallOutput } = modelPart.response;
+                  newFunctionCallOutputMessage(modelPart.id, functionCallOutput);
+                  break;
+                case 'code_execution':
+                  const { result: codeExecutionOutput } = modelPart.response;
+                  newFunctionCallOutputMessage(modelPart.id, codeExecutionOutput);
+                  break;
+                default:
+                  const _exhaustiveCheck: never = toolResponseType;
+                  throw new Error(`Unsupported tool response type in Model message: ${mPt}/${toolResponseType}`);
+              }
               break;
 
             case 'meta_cache_control':
@@ -461,39 +530,6 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
             default:
               const _exhaustiveCheck: never = mPt;
               throw new Error(`Unsupported part type in Model message: ${mPt}`);
-          }
-        }
-        break;
-
-      case 'tool':
-        for (const toolPart of messageParts) {
-          const tPt = toolPart.pt;
-          switch (tPt) {
-
-            case 'tool_response':
-              const toolResponseType = toolPart.response.type;
-              switch (toolResponseType) {
-                case 'function_call':
-                  const { result: functionCallOutput } = toolPart.response;
-                  newFunctionCallOutputMessage(toolPart.id, functionCallOutput);
-                  break;
-                case 'code_execution':
-                  const { result: codeExecutionOutput } = toolPart.response;
-                  newFunctionCallOutputMessage(toolPart.id, codeExecutionOutput);
-                  break;
-                default:
-                  const _exhaustiveCheck: never = toolResponseType;
-                  throw new Error(`Unsupported tool response type in Tool message: ${tPt}/${toolResponseType}`);
-              }
-              break;
-
-            case 'meta_cache_control':
-              // ignored - Anthropic only
-              break;
-
-            default:
-              const _exhaustiveCheck: never = tPt;
-              throw new Error(`Unsupported part type in Tool message: ${tPt}`);
           }
         }
         break;

@@ -3,14 +3,13 @@ import * as React from 'react';
 import { FormControl, ListDivider, Switch } from '@mui/joy';
 import CodeIcon from '@mui/icons-material/Code';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
-import EngineeringIcon from '@mui/icons-material/Engineering';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 
 import type { DModelDomainId } from '~/common/stores/llms/model.domains.types';
+import { AIVndAntInlineFilesPolicy, useAIPreferencesStore } from '~/common/stores/store-ai';
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
 import { FormSelectControl, FormSelectOption } from '~/common/components/forms/FormSelectControl';
 import { useLLMSelect } from '~/common/components/forms/useLLMSelect';
-import { useLabsDevMode } from '~/common/stores/store-ux-labs';
 import { useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
 
 import type { ChatThinkingPolicy, TokenCountingMethod } from '../chat/store-app-chat';
@@ -33,6 +32,12 @@ const _keepThinkingBlocksOptions: FormSelectOption<ChatThinkingPolicy>[] = [
     label: 'Discard All',
     description: 'May reduce quality',
   },
+] as const;
+
+const _vndAntInlineFilesOptions: FormSelectOption<AIVndAntInlineFilesPolicy>[] = [
+  { value: 'off', label: 'Show', description: 'Keep as links' },
+  { value: 'inline-file', label: 'Embed', description: 'Default, embed in chat' },
+  { value: 'inline-file-and-delete', label: 'Embed + Free', description: 'Embed, then free' },
 ] as const;
 
 const _tokenCountingMethodOptions: FormSelectOption<TokenCountingMethod>[] = [
@@ -84,8 +89,7 @@ export function AppChatSettingsAI() {
     chatThinkingPolicy, setChatThinkingPolicy,
     tokenCountingMethod, setTokenCountingMethod,
   } = useChatAutoAI();
-
-  const labsDevMode = useLabsDevMode();
+  const vndAntInlineFiles = useAIPreferencesStore(state => state.vndAntInlineFiles);
 
   const showModelIcons = false; // useUIComplexityMode() === 'extra';
 
@@ -141,15 +145,6 @@ export function AppChatSettingsAI() {
       tooltip='Vision model used to generate text descriptions of images when the Caption (Text) attachment option is selected.'
     />
 
-    {labsDevMode && (
-      <FormControlDomainModel
-        domainId='primaryChat'
-        title={<><EngineeringIcon color='warning' sx={{ fontSize: 'lg', mr: 0.5, mb: 0.25 }} />Last used model</>}
-        description='Chat fallback model'
-        tooltip='The last used chat model, used as default for new conversations. This is a development setting used to test out auto-detection of the most fitting initial chat model.'
-      />
-    )}
-
     <FormSelectControl
       title='Token Counting'
       tooltip='Controls how tokens are counted for context limits and pricing estimates.'
@@ -164,6 +159,22 @@ export function AppChatSettingsAI() {
       options={_keepThinkingBlocksOptions}
       value={chatThinkingPolicy}
       onChange={setChatThinkingPolicy}
+    />
+
+    <FormSelectControl<AIVndAntInlineFilesPolicy>
+      title='Anthropic Files'
+      tooltip={<>
+        When Claude uses tools like code execution, it may produce text and image files stored in Anthropic&apos;s File API. This setting controls whether Big-AGI should automatically download and embed them in the chat.
+        <ul>
+          <li><b>Show</b>: keep as references.</li>
+          <li><b>Embed</b>: download and embed text/images (default).</li>
+          <li><b>Embed + Free</b>: embed, then delete from Anthropic to free storage.</li>
+        </ul>
+        Only affects Anthropic models.
+      </>}
+      options={_vndAntInlineFilesOptions}
+      value={vndAntInlineFiles}
+      onChange={useAIPreferencesStore.getState().setVndAntInlineFiles}
     />
 
     <ListDivider inset='gutter'>Automatic AI Functions</ListDivider>

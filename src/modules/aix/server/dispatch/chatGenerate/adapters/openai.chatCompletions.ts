@@ -37,6 +37,7 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   const chatGenerate = aixSpillSystemToUser(_chatGenerate);
 
   // Dialect incompatibilities -> Hotfixes
+  // [DeepSeek, 2026-04-24] V4 doesn't require strict alternation but we keep coalescing for cleanliness; the reducer only merges assistant/user, tool messages stay separate (parallel tool_calls).
   const hotFixAlternateUserAssistantRoles = openAIDialect === 'deepseek' || openAIDialect === 'perplexity';
   const hotFixRemoveEmptyMessages = openAIDialect === 'moonshot' || openAIDialect === 'perplexity'; // [Moonshot, 2026-02-10] consecutive assistant messages (empty + content) break Moonshot - coalesce to fix
   const hotFixRemoveStreamOptions = openAIDialect === 'azure' || openAIDialect === 'mistral';
@@ -52,14 +53,14 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
 
   // [OpenAI] - o-family and reasoning models: don't support temperature/top_p, use developer role instead of system
   const hotFixOpenAIOFamily = (openAIDialect === 'openai' || openAIDialect === 'azure')
-    && ['gpt-6', 'gpt-5', 'o4', 'o3', 'o1'].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
+    && ['gpt-6', 'gpt-5', 'o4', 'o3', 'o1'].some(_id => model.id === _id || model.id.startsWith(_id + '-') || model.id.startsWith(_id + '.'));
 
   // Throw if function support is needed but missing
   if (chatGenerate.tools?.length && hotFixThrowCannotFC)
     throw new Error('This service does not support function calls');
 
   // Convert the chat messages to the OpenAI 4-Messages format
-  let chatMessages = _toOpenAIMessages(chatGenerate.systemMessage, chatGenerate.chatSequence, hotFixOpenAIOFamily);
+  let chatMessages = _toOpenAIMessages(openAIDialect, chatGenerate.systemMessage, chatGenerate.chatSequence, hotFixOpenAIOFamily);
 
   // Apply hotfixes
 
@@ -68,6 +69,13 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
 
   if (hotFixAlternateUserAssistantRoles)
     chatMessages = _fixAlternateUserAssistantRoles(chatMessages);
+
+  // [DeepSeek, 2026-04-24] When tools are present and thinking isn't disabled, V4 demands reasoning_content on EVERY assistant message in history
+  // Inject '' placeholder where missing; real reasoning is attached by _toOpenAIMessages
+  if (openAIDialect === 'deepseek' && chatGenerate.tools?.length)
+    for (const m of chatMessages)
+      if (m.role === 'assistant' && m.reasoning_content === undefined)
+        m.reasoning_content = '';
 
 
   // constrained output modes - both JSON and tool invocations
@@ -139,9 +147,32 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   }
 
   // [OpenAI] Vendor-specific reasoning effort
-  if (model.vndOaiReasoningEffort) {
-    payload.reasoning_effort = model.vndOaiReasoningEffort;
+  const reasoningEffort = model.reasoningEffort; // ?? model.vndOaiReasoningEffort;
+  if (reasoningEffort
+    && openAIDialect !== 'openrouter' // OpenRouter has its own channeling of this
+    && openAIDialect !== 'deepseek' && openAIDialect !== 'moonshot' && openAIDialect !== 'zai' // MoonShot maps to none->disabled / high->enabled
+    && openAIDialect !== 'perplexity' // Perplexity has its own block below with stricter validation
+  ) {
+    // for: 'alibaba' | 'azure' | 'groq' | 'lmstudio' | 'localai' | 'mistral' | 'openai' | 'openpipe' | 'togetherai' | 'xai'
+    payload.reasoning_effort = reasoningEffort;
   }
+
+  // [Moonshot] Kimi K2.5 reasoning effort -> thinking mode (only 'none' and 'high' supported for now)
+  // [Z.ai] GLM thinking mode: binary enabled/disabled (supports GLM-4.5 series and higher) - https://docs.z.ai/guides/capabilities/thinking-mode
+  // [DeepSeek, 2026-04-23] V4 thinking control https://api-docs.deepseek.com/guides/thinking_mode
+  if (reasoningEffort && (openAIDialect === 'deepseek' || openAIDialect === 'moonshot' || openAIDialect === 'zai')) {
+    const allowedEffort = openAIDialect === 'deepseek' ? ['none', 'high', 'max'] : ['none', 'high'];
+    if (!allowedEffort.includes(reasoningEffort)) // domain validation
+      throw new Error(`${openAIDialect} only supports reasoning effort ${allowedEffort.join(', ')}, got '${reasoningEffort}'`);
+
+    payload.thinking = { type: reasoningEffort !== 'none' ? 'enabled' : 'disabled' };
+
+    // [DeepSeek, 2026-04-23] DeepSeek also supports effort control for reasoning-enabled requests - set it here as it was carved from the reasoningEffort setter before
+    if (openAIDialect === 'deepseek' && reasoningEffort !== 'none')
+      payload.reasoning_effort = reasoningEffort;
+  }
+
+
   // [OpenAI, 2026-02-04] Verbosity control - official OpenAI parameter (low/medium/high, default: medium)
   if (model.vndOaiVerbosity) {
     // [OpenRouter, 2025-01-20] Also supported via OpenRouter for Anthropic Claude Opus 4.5, GPT-5 family
@@ -157,8 +188,8 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
 
   // Hosted tools
   // [OpenAI] Vendor-specific web search context and/or geolocation
-  // NOTE: OpenAI doesn't support web search with minimal reasoning effort
-  const skipWebSearchDueToMinimalReasoning = model.vndOaiReasoningEffort === 'minimal';
+  // NOTE: OpenAI doesn't support web search with minimal reasoning effort (see LLMParametersEditor for more details)
+  const skipWebSearchDueToMinimalReasoning = reasoningEffort === 'minimal';
   if ((model.vndOaiWebSearchContext || model.userGeolocation) && !skipWebSearchDueToMinimalReasoning && !skipWebSearchDueToCustomTools) {
     payload.web_search_options = {};
     if (model.vndOaiWebSearchContext)
@@ -188,25 +219,6 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
       // search_prompt: undefined, // could be configurable in the future
     }];
 
-  // [Moonshot] Kimi K2.5 reasoning effort -> thinking mode (only 'none' and 'high' supported for now)
-  if (openAIDialect === 'moonshot' && model.vndOaiReasoningEffort) {
-    if (model.vndOaiReasoningEffort !== 'none' && model.vndOaiReasoningEffort !== 'high')
-      throw new Error(`Moonshot Kimi K2.5 only supports reasoning effort 'none' or 'high', got '${model.vndOaiReasoningEffort}'`);
-
-    payload.thinking = { type: model.vndOaiReasoningEffort === 'none' ? 'disabled' : 'enabled' };
-
-    // Remove OpenAI-style reasoning_effort if it was set
-    delete payload.reasoning_effort;
-  }
-
-  // [Z.ai] GLM thinking mode: binary enabled/disabled (supports GLM-4.5 series and higher)
-  // Ref: https://docs.z.ai/guides/capabilities/thinking-mode
-  if (openAIDialect === 'zai' && model.vndOaiReasoningEffort) {
-    if (model.vndOaiReasoningEffort !== 'none' && model.vndOaiReasoningEffort !== 'high')
-      throw new Error(`Z.ai GLM only supports reasoning effort 'none' or 'high', got '${model.vndOaiReasoningEffort}'`);
-    payload.thinking = { type: model.vndOaiReasoningEffort === 'none' ? 'disabled' : 'enabled' };
-    delete payload.reasoning_effort;
-  }
 
   // [Moonshot] Kimi's $web_search builtin function
   if (openAIDialect === 'moonshot' && model.vndMoonshotWebSearch === 'auto' && !skipWebSearchDueToCustomTools)
@@ -220,8 +232,10 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   // [Perplexity] Vendor-specific extensions for search models
   if (openAIDialect === 'perplexity') {
     // Reasoning effort (reuses OpenAI parameter)
-    if (model.vndOaiReasoningEffort) {
-      payload.reasoning_effort = model.vndOaiReasoningEffort;
+    if (reasoningEffort) {
+      if (reasoningEffort === 'none' || reasoningEffort === 'minimal' || reasoningEffort === 'xhigh' || reasoningEffort === 'max') // domain validation
+        throw new Error(`Perplexity does not support '${reasoningEffort}' reasoning effort`);
+      payload.reasoning_effort = reasoningEffort satisfies 'low' | 'medium' | 'high'; // TS narrowing of the 3 values supported by Perplexity
     }
 
     // Search mode (academic filter)
@@ -239,41 +253,54 @@ export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model:
   // [OpenRouter, 2025-11-11] Unified reasoning parameter - supports both token-based and effort-based control
   if (openAIDialect === 'openrouter') {
 
-    // Anthropic via OpenRouter
-    // ref: https://openrouter.ai/docs/guides/guides/model-migrations/claude-4-6-opus
-    if (model.vndAntThinkingBudget !== undefined) {
+    // Anthropic via OpenRouter - incl: https://openrouter.ai/docs/guides/guides/model-migrations/claude-4-6-opus
+    const isTunneledAnt = model.id.startsWith('anthropic/');
+    const isTunneledGemini = model.id.startsWith('google/');
+    if (isTunneledAnt) {
+      // Effort -> OpenRouter verbosity -> Anthropic upstream output_config.effort
+      // OR verbosity supports low/medium/high/xhigh/max (2026-04-16). 'none'/'minimal' are OpenAI-only.
+      const antEffort = model.reasoningEffort; // ?? model.vndAntEffort;
+      if (antEffort) {
+        if (antEffort === 'none' || antEffort === 'minimal') // domain validation
+          throw new Error(`OpenRouter->Anthropic API does not support '${antEffort}' reasoning effort`);
+        payload.verbosity = antEffort;
+      }
+
+      // Thinking budget -> OpenRouter reasoning
       // vndAntThinkingBudget's presence indicates a user preference:
       // - 'adaptive': adaptive thinking (4.6+) - reasoning enabled, no explicit budget
       // - a number: explicit token budget (1024-32000)
       // - null: disable thinking (don't set reasoning field)
       if (model.vndAntThinkingBudget === 'adaptive') {
-        payload.reasoning = {
-          enabled: true,
-        };
+        payload.reasoning = { enabled: true };
         delete payload.temperature;
-      } else if (model.vndAntThinkingBudget !== null) {
-        payload.reasoning = {
-          max_tokens: model.vndAntThinkingBudget,
-        };
+      } else if (typeof model.vndAntThinkingBudget === 'number') {
+        payload.reasoning = { enabled: true, max_tokens: model.vndAntThinkingBudget };
         delete payload.temperature;
-      } else {
-        // NOTE: with thinking disabled, we can still use temperature, so we don't delete it
+      } else /* null or undefined */ {
+        // NOTE: with thinking disabled (null), we can still use temperature, so we don't delete it
         //       see the note on llms.parameters.ts: 'llmVndAntThinkingBudget'
       }
     }
-    // Anthropic effort -> OpenRouter verbosity -> Anthropic upstream output_config.effort
-    if (model.vndAntEffort)
-      payload.verbosity = model.vndAntEffort;
-
     // Gemini via OpenRouter - budget-based (2.5) or level-based (3.0+)
-    else if (model.vndGeminiThinkingBudget !== undefined)
-      payload.reasoning = { max_tokens: model.vndGeminiThinkingBudget ?? 8192 };
-    else if (model.vndGeminiThinkingLevel)
-      payload.reasoning = { effort: model.vndGeminiThinkingLevel };
-
-    // OpenAI via OpenRouter - all effort levels including 'none' and 'minimal' are valid
-    else if (model.vndOaiReasoningEffort)
-      payload.reasoning = { effort: model.vndOaiReasoningEffort };
+    else if (isTunneledGemini) {
+      if (model.vndGeminiThinkingBudget !== undefined) {
+        payload.reasoning = { enabled: true, max_tokens: model.vndGeminiThinkingBudget };
+      } else {
+        const gemEffort = model.reasoningEffort; // ?? model.vndGeminiThinkingLevel;
+        if (gemEffort) {
+          if (gemEffort === 'none' || gemEffort === 'xhigh' || gemEffort === 'max') // domain validation
+            throw new Error(`OpenRouter->Gemini API does not support '${gemEffort}' reasoning effort`);
+          payload.reasoning = { enabled: true, effort: gemEffort };
+        }
+      }
+    }
+    // OpenAI-compatible (including deepseek, moonshotai, x-ai, z-ai) via OpenRouter - all effort levels including 'none' and 'minimal' are valid (not max, that's just for Anthropic via verbosity)
+    else if (reasoningEffort) {
+      if (reasoningEffort === 'max') // domain validation
+        throw new Error(`OpenRouter->OpenAI API does not support '${reasoningEffort}' reasoning effort`);
+      payload.reasoning = { enabled: reasoningEffort !== 'none', effort: reasoningEffort };
+    }
 
     // FIX double-reasoning request - remove reasoning_effort after transferring it to reasoning (unless already set)
     if (payload.reasoning_effort) {
@@ -334,19 +361,23 @@ function _fixAlternateUserAssistantRoles(chatMessages: TRequestMessages): TReque
       };
     }
 
-    // if the current item has the same role as the last item, concatenate their content
+    // If current item has the same role as the last, coalesce ONLY assistant/user.
+    // Tool/system/developer must stay separate - tool messages each pair with a tool_call_id; merging corrupts the protocol.
     if (acc.length > 0) {
       const lastItem = acc[acc.length - 1];
       if (lastItem.role === historyItem.role) {
         if (lastItem.role === 'assistant') {
           lastItem.content += hotFixSquashTextSeparator + historyItem.content;
-        } else if (lastItem.role === 'user') {
+          return acc;
+        }
+        if (lastItem.role === 'user') {
           lastItem.content = [
             ...(Array.isArray(lastItem.content) ? lastItem.content : [OpenAIWire_ContentParts.TextContentPart(lastItem.content)]),
             ...(Array.isArray(historyItem.content) ? historyItem.content : historyItem.content ? [OpenAIWire_ContentParts.TextContentPart(historyItem.content)] : []),
           ];
+          return acc;
         }
-        return acc;
+        // fall through to push for tool/system/developer - each stays its own message
       }
     }
 
@@ -428,7 +459,10 @@ function _fixVndOaiRestoreMarkdown_Inline(payload: TRequest) {
 }*/
 
 
-function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chatSequence: AixMessages_ChatMessage[], hotFixOpenAIo1Family: boolean): TRequestMessages {
+function _toOpenAIMessages(openAIDialect: OpenAIDialects, systemMessage: AixMessages_SystemMessage | null, chatSequence: AixMessages_ChatMessage[], hotFixOpenAIo1Family: boolean): TRequestMessages {
+
+  // [DeepSeek, 2026-04-24] V4 thinking-by-default - reasoning_content must round-trip on tool-call turns; payload is the 'ma' part's aText (unlike Gemini/OpenAI-Responses which carry opaque handles).
+  const echoDeepseekReasoning = openAIDialect === 'deepseek';
 
   // Transform the chat messages into OpenAI's format (an array of 'system', 'user', 'assistant', and 'tool' messages)
   const chatMessages: TRequestMessages = [];
@@ -541,6 +575,8 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
         break;
 
       case 'model':
+        // Accumulate 'ma' reasoning text across this turn; echoed below onto the assistant message if it carries tool_calls (DeepSeek only).
+        let pendingReasoningText = '';
         for (const part of parts) {
           const currentMessage = chatMessages[chatMessages.length - 1];
           switch (part.pt) {
@@ -616,7 +652,17 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
               break;
 
             case 'ma':
-              // ignore this thinking block - Anthropic only
+              // [DeepSeek only] accumulate reasoning text for the echo-back below. Other dialects ignore 'ma' (reasoning continuity flows via _vnd opaque handles, not via this adapter).
+              if (echoDeepseekReasoning && part.aType === 'reasoning' && part.aText)
+                pendingReasoningText += part.aText;
+              break;
+
+            case 'tool_response':
+              const toolErrorPrefix = part.error ? (typeof part.error === 'string' ? `[ERROR] ${part.error} - ` : '[ERROR] ') : '';
+              if (part.response.type === 'function_call' || part.response.type === 'code_execution')
+                chatMessages.push(OpenAIWire_Messages.ToolMessage(part.id, toolErrorPrefix + part.response.result));
+              else
+                throw new Error(`Unsupported tool response type in Model message: ${(part as any).pt}`);
               break;
 
             case 'meta_cache_control':
@@ -629,29 +675,18 @@ function _toOpenAIMessages(systemMessage: AixMessages_SystemMessage | null, chat
           }
 
         }
-        break;
 
-      case 'tool':
-        for (const part of parts) {
-          switch (part.pt) {
-
-            case 'tool_response':
-              const toolErrorPrefix = part.error ? (typeof part.error === 'string' ? `[ERROR] ${part.error} - ` : '[ERROR] ') : '';
-              if (part.response.type === 'function_call' || part.response.type === 'code_execution')
-                chatMessages.push(OpenAIWire_Messages.ToolMessage(part.id, toolErrorPrefix + part.response.result));
-              else
-                throw new Error(`Unsupported tool response type in Tool message: ${(part as any).pt}`);
-              break;
-
-            case 'meta_cache_control':
-              // ignore this breakpoint hint - Anthropic only
-              break;
-
-            default:
-              const _exhaustiveCheck: never = part;
-              throw new Error(`Unsupported part type in Tool message: ${(part as any).pt}`);
+        // [DeepSeek] attach accumulated reasoning to this turn's assistant message only if it carries tool_calls; plain-text turns don't need the echo per docs.
+        if (echoDeepseekReasoning && pendingReasoningText) {
+          for (let i = chatMessages.length - 1; i >= 0; i--) {
+            const m = chatMessages[i];
+            if (m.role !== 'assistant') continue;
+            if (m.tool_calls?.length)
+              m.reasoning_content = pendingReasoningText;
+            break; // stop at the most recent assistant message from this turn
           }
         }
+
         break;
     }
   }

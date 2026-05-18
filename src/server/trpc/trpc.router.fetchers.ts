@@ -273,10 +273,12 @@ async function _fetchFromTRPC<TBody extends object | undefined | FormData, TOut>
       const inferredType = _inferTextPayloadType(payloadString);
       if (inferredType)
         payloadString = `The data looks like ${inferredType}: \n\n"${payloadString}"`;
+      else
+        payloadString = '"' + payloadString + '"';
     }
 
     if (SERVER_DEBUG_WIRE || SERVER_LOG_FETCHERS_ERRORS)
-      console.log(`[${method}] [${moduleName} issue] (http ${s}, ${response.statusText}):`, { parserName, payloadMessage: payloadString });
+      console.log(`[${method}->${parserName}] [${moduleName} issue] (http ${s}, ${response.statusText}):`, { url, responseOk: response.ok, notOkayPayload: payloadString || notOkayPayload });
 
     // -> throw HTTP error: will be a 400 (BAD_REQUEST), with preserved status
     throw new TRPCFetcherError({
@@ -284,10 +286,10 @@ async function _fetchFromTRPC<TBody extends object | undefined | FormData, TOut>
       httpStatus: s,
       message: (throwWithoutName ? '' : `[${moduleName} issue]: `)
         + `Upstream responded with HTTP ${s} ${response.statusText}`
-        + (payloadString ? ` - \n${payloadString}` : '')
+        + (payloadString ? `: \n${payloadString}` : '')
         // Custom hints for common issues from select providers
         + (s === 403 && moduleName === 'Gemini' && payloadString?.includes('Requests from referer') ? ' \n\nGemini: Check API key restrictions in Google Cloud Console' : '')
-        + ((s === 404 || s === 403 || s === 502) && !url.includes('app.openpipe.ai') ? ` \n\nPlease make sure the Server can access -> ${debugCleanUrl}` : ''), // [OpenPipe] 403 when the model is associated to the project, 404 when not found
+        + ((s === 404 || (s === 403 && !url.includes('bedrock') /* just a tad more silence */) || s === 502) && !url.includes('app.openpipe.ai') ? ` \n\nPlease make sure the Server can access -> ${debugCleanUrl}` : ''), // [OpenPipe] 403 when the model is associated to the project, 404 when not found
       // cause: payload, // NOT an Error - do not use even to preserve original error payload as cause
     });
   }
