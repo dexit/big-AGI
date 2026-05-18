@@ -25,6 +25,7 @@ export interface DLLM {
   label: string;
   created: number | 0;
   updated?: number | 0;
+  pubDate?: string; // official release date in 'YYYYMMDD'
   description: string;
   hidden: boolean;
 
@@ -97,6 +98,10 @@ export function isLLMVisible(llm: DLLM): boolean {
   return !(llm.userHidden ?? llm.hidden ?? false);
 }
 
+export function isLLMCustomUserParameters(llm: DLLM): boolean {
+  return !!(llm.userParameters && Object.keys(llm.userParameters).length > 0);
+}
+
 /**
  * Returns the effective context token limit for a model.
  * Checks user override first, then vendor-specific parameters, then falls back to model default.
@@ -133,6 +138,20 @@ export function getLLMMaxOutputTokens(llm: DLLM | null): DLLMMaxOutputTokens | u
   return llm.userMaxOutputTokens ?? llm.maxOutputTokens;
 }
 
+/**
+ * Parse the model's editorial `pubDate` ('YYYYMMDD') into a Date, or null if missing/malformed.
+ * Date is constructed at local midnight - pubDate is day-precision, no time component.
+ */
+export function getLLMPubDate(llm: DLLM | null | undefined): Date | null {
+  const p = llm?.pubDate;
+  if (!p || !/^\d{8}$/.test(p)) return null;
+  const y = parseInt(p.slice(0, 4), 10);
+  const m = parseInt(p.slice(4, 6), 10) - 1; // JS Date months are 0-indexed
+  const d = parseInt(p.slice(6, 8), 10);
+  const date = new Date(y, m, d);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
 /// Interfaces ///
 
 // do not change anything below! those will be persisted in data
@@ -143,12 +162,12 @@ export type DModelInterfaceV1 =
   | 'ant-tools-search'
   | 'oai-chat-vision'
   | 'oai-chat-reasoning'
-  | 'oai-complete'
   | 'ant-prompt-caching'
+  | 'gem-code-execution'
+  | 'gem-interactions'
   | 'oai-prompt-caching'
   | 'oai-realtime'
   | 'oai-responses'
-  | 'gem-code-execution'
   | 'outputs-audio'            // TEMP: ui flag - supports audio output (e.g., text-to-speech)
   | 'outputs-image'            // TEMP: ui flag - supports image output (image generation)
   | 'outputs-no-text'          // disable text outputs (used in conjunction with alt-outputs) - assumed off
@@ -165,6 +184,7 @@ export type DModelInterfaceV1 =
 // FIXME: keep this in sync with the server side on modules/llms/server/llm.server.types.ts
 export const LLM_IF_OAI_Chat: DModelInterfaceV1 = 'oai-chat';
 export const LLM_IF_OAI_Fn: DModelInterfaceV1 = 'oai-chat-fn';
+/** @deprecated we don't se this one anymore 2026-04-19; suspended until we have a reason or per-model continuos validation of this */
 export const LLM_IF_OAI_Json: DModelInterfaceV1 = 'oai-chat-json'; // for Structured Outputs (or JSON mode at worst)
 export const LLM_IF_ANT_ToolsSearch: DModelInterfaceV1 = 'ant-tools-search';
 // export const LLM_IF_OAI_JsonSchema: ... future?
@@ -174,11 +194,11 @@ export const LLM_IF_Outputs_Audio: DModelInterfaceV1 = 'outputs-audio';
 export const LLM_IF_Outputs_Image: DModelInterfaceV1 = 'outputs-image';
 export const LLM_IF_Outputs_NoText: DModelInterfaceV1 = 'outputs-no-text';
 export const LLM_IF_Tools_WebSearch: DModelInterfaceV1 = 'tools-web-search';
-export const LLM_IF_OAI_Complete: DModelInterfaceV1 = 'oai-complete';
 export const LLM_IF_ANT_PromptCaching: DModelInterfaceV1 = 'ant-prompt-caching';
+export const LLM_IF_GEM_CodeExecution: DModelInterfaceV1 = 'gem-code-execution';
+export const LLM_IF_GEM_Interactions: DModelInterfaceV1 = 'gem-interactions';
 export const LLM_IF_OAI_PromptCaching: DModelInterfaceV1 = 'oai-prompt-caching';
 export const LLM_IF_OAI_Responses: DModelInterfaceV1 = 'oai-responses';
-export const LLM_IF_GEM_CodeExecution: DModelInterfaceV1 = 'gem-code-execution';
 export const LLM_IF_HOTFIX_NoStream: DModelInterfaceV1 = 'hotfix-no-stream';
 export const LLM_IF_HOTFIX_NoTemperature: DModelInterfaceV1 = 'hotfix-no-temperature';
 export const LLM_IF_HOTFIX_NoWebP: DModelInterfaceV1 = 'hotfix-no-webp';
@@ -204,6 +224,7 @@ export const LLMS_ALL_INTERFACES = [
   // Vendor-specific capabilities
   LLM_IF_ANT_PromptCaching,   // [Anthropic] model supports anthropic-specific caching
   LLM_IF_GEM_CodeExecution,   // [Gemini] Tool: code execution
+  LLM_IF_GEM_Interactions,    // [Gemini] Interactions API (required by Deep Research agents)
   LLM_IF_OAI_PromptCaching,   // [OpenAI] model supports OpenAI prompt caching
   LLM_IF_OAI_Responses,       // [OpenAI] Responses API (new) support
   // Hotfixes to patch specific model quirks
@@ -213,8 +234,6 @@ export const LLMS_ALL_INTERFACES = [
   LLM_IF_HOTFIX_StripImages,  // remove images from input (e.g. o3-mini-2025-01-31)
   LLM_IF_HOTFIX_StripSys0,    // strip system instruction (e.g. Gemini Image Generation 2025-03-13), excludes Sys0ToUsr0
   LLM_IF_HOTFIX_Sys0ToUsr0,   // downgrade system to user messages for this model (e.g. o1-mini-2024-09-12)
-  // old/unused
-  LLM_IF_OAI_Complete,        // UNUSED - older text completion, pre-chats
 ] as const;
 
 // Future changes?

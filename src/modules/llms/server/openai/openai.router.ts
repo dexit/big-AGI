@@ -30,9 +30,9 @@ const _createImageConfigBase = z.object({
   user: z.string().optional(),
 });
 
-// GPT Image family (gpt-image-1.5, gpt-image-1, gpt-image-1-mini share all parameters)
+// GPT Image family (all members share the same parameter surface)
 const createImageConfigGI = _createImageConfigBase.extend({
-  model: z.enum(['gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini']),
+  model: OpenAIWire_API_Images_Generations.GptImageModels_schema,
   prompt: z.string().max(32000),
   size: z.enum([/*'auto',*/ '1024x1024', '1536x1024', '1024x1536']),
   quality: z.enum(['high', 'medium', 'low']).optional(),
@@ -153,8 +153,8 @@ export const llmOpenAIRouter = createTRPCRouter({
 
       const { access, generationConfig: config, editConfig } = input;
 
-      // Determine if this is an edit request
-      const isGptImageFamily = config.model === 'gpt-image-1' || config.model === 'gpt-image-1-mini';
+      // Determine if this is an edit request (any member of the GPT Image family supports edits)
+      const isGptImageFamily = config.model === 'gpt-image-2' || config.model === 'gpt-image-1.5' || config.model === 'gpt-image-1' || config.model === 'gpt-image-1-mini';
       const isEdit = !!editConfig?.inputImages?.length && isGptImageFamily;
 
       // validate input
@@ -296,7 +296,14 @@ export const llmOpenAIRouter = createTRPCRouter({
     .input(listModelsInputSchema)
     .query(async ({ input: { access } }) => {
       const wireLocalAIModelsAvailable = await openaiGETOrThrow(access, '/models/available');
-      return wireLocalAIModelsAvailableOutputSchema.parse(wireLocalAIModelsAvailable).filter(model => !!model.name);
+      try {
+        return wireLocalAIModelsAvailableOutputSchema.parse(wireLocalAIModelsAvailable).filter(model => !!model.name);
+      } catch (error: any) {
+        throw new TRPCError({
+          code: 'UNPROCESSABLE_CONTENT',
+          message: `[LocalAI gallery issue]: The gallery response format is not compatible. ${error?.message || 'Schema validation failed.'}`,
+        });
+      }
     }),
 
   /* [LocalAI] Download a model from a Model Gallery */

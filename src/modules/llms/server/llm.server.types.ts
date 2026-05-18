@@ -76,35 +76,36 @@ const ModelParameterSpec_schema = z.object({
   paramId: z.enum([
     'llmTopP',
     'llmForceNoStream',
+    // Vendor-specific effort params (converge to unified `effort` wire field)
+    'llmVndAntEffort',
+    'llmVndGemEffort',
+    'llmVndOaiEffort',
+    'llmVndMiscEffort',
     // Anthropic
     'llmVndAnt1MContext',
-    'llmVndAntEffort',
-    'llmVndAntEffortMax',
     'llmVndAntInfSpeed',
     'llmVndAntSkills',
     'llmVndAntThinkingBudget',
+    'llmVndAntWebDynamic',
     'llmVndAntWebFetch',
+    'llmVndAntWebFetchMaxUses',
     'llmVndAntWebSearch',
+    'llmVndAntWebSearchMaxUses',
+    // Bedrock
+    'llmVndBedrockAPI',
     // Gemini
+    'llmVndGeminiAgentViz',
     'llmVndGeminiAspectRatio',
     'llmVndGeminiCodeExecution',
     'llmVndGeminiComputerUse',
     'llmVndGeminiGoogleSearch',
     'llmVndGeminiImageSize',
     'llmVndGeminiMediaResolution',
-    'llmVndGeminiShowThoughts',
     'llmVndGeminiThinkingBudget',
-    'llmVndGeminiThinkingLevel',
-    'llmVndGeminiThinkingLevel4',
     // 'llmVndGeminiUrlContext',
     // Moonshot
-    'llmVndMoonReasoningEffort',
     'llmVndMoonshotWebSearch',
     // OpenAI
-    'llmVndOaiReasoningEffort',
-    'llmVndOaiReasoningEffort4',
-    'llmVndOaiReasoningEffort52',
-    'llmVndOaiReasoningEffort52Pro',
     'llmVndOaiRestoreMarkdown',
     'llmVndOaiVerbosity',
     'llmVndOaiWebSearchContext',
@@ -122,13 +123,12 @@ const ModelParameterSpec_schema = z.object({
     'llmVndXaiWebSearch',
     'llmVndXaiXSearch',
     'llmVndXaiXSearchHandles',
-    // Z.ai
-    'llmVndZaiReasoningEffort',
   ] satisfies DModelParameterId[]),
   required: z.boolean().optional(),
   hidden: z.boolean().optional(),
   initialValue: z.number().or(z.string()).or(z.boolean()).nullable().optional(),
   // special params
+  enumValues: z.array(z.string()).optional(), // restrict enum values for this model
   rangeOverride: z.tuple([z.number(), z.number()]).optional(), // [min, max]
 });
 
@@ -138,9 +138,10 @@ export const ModelDescription_schema = z.object({
   label: z.string(),
   created: z.int().optional(),
   updated: z.int().optional(),
+  pubDate: z.string().regex(/^\d{8}$/).optional(), // editorial: model's official public release date 'YYYYMMDD'. Required for editorial entries (KnownModelEditorial) and for 0-day-fillable paths (Anthropic placeholder, Gemini unknown-model fallback). Omitted for dynamic-only vendors and unknown variants where we have no reliable signal.
   description: z.string(),
   contextWindow: z.int().nullable(),
-  interfaces: z.array(z.union([z.enum(LLMS_ALL_INTERFACES), z.string()])), // backward compatibility: to not Break client-side interface parsing on newer server
+  interfaces: z.array(z.enum(LLMS_ALL_INTERFACES).or(z.string())), // backward compatibility: to not Break client-side interface parsing on newer server
   parameterSpecs: z.array(ModelParameterSpec_schema).optional(),
   maxCompletionTokens: z.int().optional(), // initial parameter value for 'llmResponseTokens'
   // rateLimits: rateLimitsSchema.optional(),
@@ -156,6 +157,7 @@ export const ModelDescription_schema = z.object({
 // Each vendor's lookup filters to only what works through OpenRouter's OAI-compatible API.
 // OpenRouter merges these with its own auto-detected interfaces and params.
 export type OrtVendorLookupResult = {
+  pubDate?: ModelDescriptionSchema['pubDate'];
   interfaces?: ModelDescriptionSchema['interfaces'];
   parameterSpecs?: ModelDescriptionSchema['parameterSpecs'];
   initialTemperature?: number; // vendor-specific default (e.g. Gemini 1.0); undefined = use global fallback (0.5)
@@ -166,4 +168,17 @@ export type OrtVendorLookupResult = {
 
 export const ListModelsResponse_schema = z.object({
   models: z.array(ModelDescription_schema),
+});
+
+
+/// File Metadata Response
+
+export const FileMetadataResponse_schema = z.object({
+  id: z.string(),
+  type: z.literal('file'),
+  filename: z.string(),
+  mime_type: z.string(),
+  size_bytes: z.number(),
+  created_at: z.string(),
+  downloadable: z.boolean().optional(),
 });

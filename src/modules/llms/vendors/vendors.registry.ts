@@ -3,6 +3,7 @@ import type { AixAPI_Access } from '~/modules/aix/server/api/aix.wiretypes';
 import { ModelVendorAlibaba } from './alibaba/alibaba.vendor';
 import { ModelVendorAnthropic } from './anthropic/anthropic.vendor';
 import { ModelVendorAzure } from './azure/azure.vendor';
+import { ModelVendorBedrock } from './bedrock/bedrock.vendor';
 import { ModelVendorDeepseek } from './deepseek/deepseekai.vendor';
 import { ModelVendorGemini } from './gemini/gemini.vendor';
 import { ModelVendorGroq } from './groq/groq.vendor';
@@ -26,6 +27,7 @@ export type ModelVendorId =
   | 'alibaba'
   | 'anthropic'
   | 'azure'
+  | 'bedrock'
   | 'deepseek'
   | 'googleai'
   | 'groq'
@@ -43,11 +45,12 @@ export type ModelVendorId =
   | 'zai'
   ;
 
-/** Global: Vendor Instances Registry **/
-const MODEL_VENDOR_REGISTRY: Record<ModelVendorId, IModelVendor> = {
+/** Global: Vendor Instances Registry (`satisfies` validates keys, TS preserves specific vendor types) **/
+const MODEL_VENDOR_REGISTRY = {
   alibaba: ModelVendorAlibaba,
   anthropic: ModelVendorAnthropic,
   azure: ModelVendorAzure,
+  bedrock: ModelVendorBedrock,
   deepseek: ModelVendorDeepseek,
   googleai: ModelVendorGemini,
   groq: ModelVendorGroq,
@@ -63,7 +66,13 @@ const MODEL_VENDOR_REGISTRY: Record<ModelVendorId, IModelVendor> = {
   togetherai: ModelVendorTogetherAI,
   xai: ModelVendorXAI,
   zai: ModelVendorZAI,
-} as Record<string, IModelVendor>;
+} as const satisfies Record<ModelVendorId, IModelVendor>;
+
+
+// --- Type Helpers - for Id -> concrete type mappings ---
+// NOTE: we haven't ported the full system to type inference, this is just a way forward
+export type ModelVendorOf<V extends ModelVendorId> = (typeof MODEL_VENDOR_REGISTRY)[V];
+export type ModelVendorAccessOf<V extends ModelVendorId> = ModelVendorOf<V> extends IModelVendor<any, infer TAccess> ? TAccess : never;
 
 
 export function findAllModelVendors(): IModelVendor[] {

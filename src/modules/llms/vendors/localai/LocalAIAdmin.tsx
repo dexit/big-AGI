@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
-import { Alert, Box, Button, Card, Chip, CircularProgress, IconButton, LinearProgress, List, ListItem, Sheet, Switch, Table, Typography } from '@mui/joy';
+import { Alert, Box, Button, Card, Chip, CircularProgress, IconButton, Input, LinearProgress, List, ListItem, Sheet, Switch, Table, Typography } from '@mui/joy';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import SearchIcon from '@mui/icons-material/Search';
 
 import { ExpanderAccordion } from '~/common/components/ExpanderAccordion';
 import { GoodModal } from '~/common/components/modals/GoodModal';
@@ -123,8 +124,9 @@ export function LocalAIAdmin(props: { access: OpenAIAccessSchema, onClose: () =>
 
   // state
   const [installModels, setInstallModels] = React.useState<{ galleryName: string; modelName: string; }[]>([]);
+  const [searchQuery, setSearchQuery] = React.useState('');
   const [showVoiceModels, setShowVoiceModels] = React.useState(false);
-  const parentRef = React.useRef<HTMLDivElement>(null);
+  const [scrollElement, setScrollElement] = React.useState<HTMLDivElement | null>(null);
 
   // external state
   const { data, error } = apiQuery.llmOpenAI.dialectLocalAI_galleryModelsAvailable.useQuery({ access: props.access }, {
@@ -133,15 +135,19 @@ export function LocalAIAdmin(props: { access: OpenAIAccessSchema, onClose: () =>
 
   // derived state
   const galleryNotConfigured = data === null;
-  const filteredModels = React.useMemo(() =>
-    data?.filter(model => showVoiceModels || !model.name?.startsWith('voice-')) || [],
-    [data, showVoiceModels]
-  );
+  const filteredModels = React.useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return data?.filter(model => {
+      if (!showVoiceModels && model.name?.startsWith('voice-'))
+        return false;
+      return !query || model.name?.toLowerCase().includes(query) || model.description?.toLowerCase().includes(query);
+    }) || [];
+  }, [data, searchQuery, showVoiceModels]);
 
   // virtualizer
   const virtualizer = useVirtualizer({
     count: filteredModels.length,
-    getScrollElement: () => parentRef.current,
+    getScrollElement: () => scrollElement,
     estimateSize: () => 40, // Fixed row height
     overscan: 5,
   });
@@ -198,6 +204,14 @@ export function LocalAIAdmin(props: { access: OpenAIAccessSchema, onClose: () =>
           <CircularProgress color='success' />
         ) : (
           <>
+            <Input
+              placeholder='Filter models...'
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              startDecorator={<SearchIcon />}
+              sx={{ mb: -1 }}
+            />
+
             <Sheet
               variant='outlined'
               sx={{
@@ -206,7 +220,7 @@ export function LocalAIAdmin(props: { access: OpenAIAccessSchema, onClose: () =>
               }}
             >
               <Box
-                ref={parentRef}
+                ref={setScrollElement}
                 sx={{
                   height: '500px',
                   overflow: 'auto',
@@ -263,8 +277,8 @@ export function LocalAIAdmin(props: { access: OpenAIAccessSchema, onClose: () =>
                             <Button
                               size='sm'
                               color='neutral'
-                              disabled={installModels.some(p => p.galleryName === model.gallery.name && p.modelName === model.name)}
-                              onClick={() => model.name && handleAppendInstall(model.gallery.name, model.name)}
+                              disabled={!model.gallery?.name || installModels.some(p => p.galleryName === model.gallery?.name && p.modelName === model.name)}
+                              onClick={() => model.name && model.gallery?.name && handleAppendInstall(model.gallery.name, model.name)}
                               sx={{ minWidth: 'auto', minHeight: 'auto', px: 1, py: 0.25 }}
                             >
                               Install

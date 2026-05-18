@@ -108,7 +108,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
     // [OpenAI] an upstream error will be handled gracefully and transmitted as text (throw to transmit as 'error')
     if (json.error) {
-      // FIXME: potential point for throwing RequestRetryError (using 'srv-warn' for now)
+      // FIXME: potential point for throwing OperationRetrySignal (using 'srv-warn' for now)
       return pt.setDialectTerminatingIssue(safeErrorString(json.error) || 'unknown.', IssueSymbols.Generic, 'srv-warn');
     }
 
@@ -287,7 +287,7 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
             id: deltaToolCall.id || serverSideId('aix-tool-call-id'),
             type: 'function',
             function: {
-              name: deltaToolCall.function.name || '',
+              name: deltaToolCall.function.name ?? '',
               arguments: deltaToolCall.function.arguments || '',
             },
           };
@@ -356,6 +356,8 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
                 // OpenAI sends PCM16 audio data that needs to be converted to WAV
                 const a = openaiConvertPCM16ToWAV(acc.data);
                 pt.appendAudioInline(a.mimeType, a.base64Data, acc.transcript || 'OpenAI Generated Audio', `OpenAI ${json.model || ''}`.trim(), a.durationMs);
+                // Audio models don't send finish_reason; treat successful audio completion as 'ok'
+                pt.setTokenStopReason('ok');
               } catch (error) {
                 console.warn('[OpenAI] Failed to process streaming audio:', error);
                 pt.setDialectTerminatingIssue(`Failed to process audio: ${error}`, null, 'srv-warn');
@@ -384,9 +386,14 @@ export function createOpenAIChatCompletionsChunkParser(): ChatGenerateParseFunct
 
       // Token Stop Reason - usually missing in all but the last chunk, but we don't rely on it
       if (finish_reason) {
-        const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
-        if (tokenStopReason !== null)
-          pt.setTokenStopReason(tokenStopReason);
+        // [Z.ai, 2026-02-26] 'network_error' is an upstream error, not a normal stop reason
+        if (finish_reason === 'network_error')
+          pt.setDialectTerminatingIssue('Upstream network error.', IssueSymbols.Generic, 'srv-warn');
+        else {
+          const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
+          if (tokenStopReason !== null)
+            pt.setTokenStopReason(tokenStopReason);
+        }
       }
 
       // Note: not needed anymore - Workaround for implementations that don't send the [DONE] event
@@ -487,6 +494,10 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       } else if (message.content !== undefined && message.content !== null)
         throw new Error(`unexpected message content type: ${typeof message.content}`);
 
+      // [DeepSeek, 2026-04-24] Non-streaming reasoning_content -> 'ma' reasoning part (mirror of streaming path above)
+      if (typeof message.reasoning_content === 'string' && message.reasoning_content)
+        pt.appendReasoningText(message.reasoning_content);
+
       // [OpenRouter, 2025-01-20] Handle structured reasoning_details
       if (Array.isArray(message.reasoning_details)) {
         for (const reasoningDetail of message.reasoning_details) {
@@ -520,9 +531,14 @@ export function createOpenAIChatCompletionsParserNS(): ChatGenerateParseFunction
       } // .choices.tool_calls[]
 
       // Token Stop Reason - expected to be set
-      const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
-      if (tokenStopReason !== null)
-        pt.setTokenStopReason(tokenStopReason);
+      // [Z.ai, 2026-02-26] 'network_error' is an upstream error, not a normal stop reason
+      if (finish_reason === 'network_error')
+        pt.setDialectTerminatingIssue('Upstream network error.', IssueSymbols.Generic, 'srv-log');
+      else {
+        const tokenStopReason = _fromOpenAIFinishReason(finish_reason);
+        if (tokenStopReason !== null)
+          pt.setTokenStopReason(tokenStopReason);
+      }
 
       // [OpenAI, 2025-03-11] message: Annotations[].url_citation
       if (message.annotations !== undefined) {
@@ -629,7 +645,7 @@ function _fromOpenAIFinishReason(finish_reason: string | null | undefined) {
   }
 
   // Developers: show more finish reasons (not under flag for now, so we can add to the supported set)
-  console.log('AIX: OpenAI-dispatch unexpected finish_reason:', finish_reason);
+  console.warn('AIX: OpenAI-dispatch unexpected finish_reason:', finish_reason);
   return null;
 }
 
@@ -658,7 +674,9 @@ function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage
 
   // Input redistribution: Cache Read
   if (usage.prompt_tokens_details) {
-    const TCacheRead = usage.prompt_tokens_details.cached_tokens;
+    // TODO Input redistribution: Audio tokens
+    // const TAudioIn = usage.prompt_tokens_details.audio_tokens ?? undefined;
+    const TCacheRead = usage.prompt_tokens_details.cached_tokens ?? undefined;
     if (TCacheRead !== undefined && TCacheRead > 0) {
       metricsUpdate.TCacheRead = TCacheRead;
       if (metricsUpdate.TIn !== undefined)
@@ -676,18 +694,18 @@ function _fromOpenAIUsage(usage: OpenAIWire_API_Chat_Completions.Response['usage
     }
   }
 
-  // TODO Input redistribution: Audio tokens
-
   // Output Metrics
 
   // Output breakdown: Reasoning
   if (usage.completion_tokens_details) {
-    const details = usage.completion_tokens_details || {};
-    if (details.reasoning_tokens !== undefined)
-      metricsUpdate.TOutR = usage.completion_tokens_details.reasoning_tokens;
+    const TOutReasoning = usage.completion_tokens_details.reasoning_tokens ?? undefined;
+    if (TOutReasoning !== undefined)
+      metricsUpdate.TOutR = TOutReasoning;
+    // TODO: Output breakdown: Audio / Image
+    // const TOutAudio = details.audio_tokens ?? undefined;
+    // const TOutImage = details.image_tokens ?? undefined;
   }
 
-  // TODO: Output breakdown: Audio
 
   // Upstream Cost Reporting
 
@@ -739,7 +757,7 @@ function _forwardOpenRouterDataError(parsedData: any, pt: IParticleTransmitter) 
   }
 
   // Transmit the error as text - note: throw if you want to transmit as 'error'
-  // FIXME: potential point for throwing RequestRetryError (using 'srv-warn' for now)
+  // FIXME: potential point for throwing OperationRetrySignal (using 'srv-warn' for now)
   pt.setDialectTerminatingIssue(errorMessage, IssueSymbols.Generic, 'srv-warn');
   return true;
 }
