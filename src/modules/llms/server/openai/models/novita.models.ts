@@ -2,7 +2,10 @@ import { DModelInterfaceV1, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM
 
 import type { ModelDescriptionSchema } from '../../llm.server.types';
 
-import { fromManualMapping, ManualMappings } from '../../models.mappings';
+import { formatPubDate, fromManualMapping, llmsDefineManualMappings } from '../../models.mappings';
+
+// --- Novita Model ID inference (auto-derived from _novitaKnownModels) ---
+export type LlmsNovitaModelId = typeof _novitaKnownModels[number]['idPrefix'];
 import { wireNovitaListOutputSchema, WireNovitaModel } from '../wiretypes/novita.wiretypes';
 
 
@@ -11,9 +14,9 @@ export function novitaHeuristic(hostname: string) {
 }
 
 
-const _novitaKnownModels: ManualMappings = [
+const _novitaKnownModels = llmsDefineManualMappings([
   // NOTE: we don't need manual patching as we have enough info from API
-] as const;
+]);
 
 const _novitaDenyListContains: string[] = [
   // OCR models - not chat models
@@ -109,7 +112,7 @@ export function novitaModelsToModelDescriptions(wireModels: unknown): ModelDescr
         }
         : undefined;
 
-      return fromManualMapping(_novitaKnownModels, model.id, model.created, undefined, {
+      const md = fromManualMapping(_novitaKnownModels, model.id, model.created, undefined, {
         idPrefix: model.id,
         label,
         description,
@@ -119,6 +122,14 @@ export function novitaModelsToModelDescriptions(wireModels: unknown): ModelDescr
         chatPrice,
         hidden: false,
       });
+
+      // pubDate fallback: Novita's 'created' is verified real per-model release/index dates (a genuine
+      // 2024-2026 spread, not a constant), so derive a day-precision pubDate to drive the "new" badge for
+      // models without an editorial pubDate. An editorial pubDate (from _novitaKnownModels) always wins.
+      if (md.pubDate === undefined && md.created)
+        md.pubDate = formatPubDate(md.created);
+
+      return md;
     })
 
     .sort((a: ModelDescriptionSchema, b: ModelDescriptionSchema): number => {

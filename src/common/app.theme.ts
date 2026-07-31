@@ -33,6 +33,13 @@ const jetBrainsMono = JetBrains_Mono({
 });
 export const themeCodeFontFamilyCss = jetBrainsMono.style.fontFamily;
 
+/**
+ * Hotter lime for 'New'/'Beta' badges - intentionally brighter than the 400 brand anchor
+ * so tiny chips pop; pairs with black text and bold weight. Mirrors the website's
+ * RankingsSection chipNew - keep the two in sync.
+ */
+export const brandLimeExtraBadge = '#d4ff3a';
+
 
 export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
   fontFamily: {
@@ -40,6 +47,8 @@ export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
     display: themeFontFamilyCss,
     code: themeCodeFontFamilyCss,
   },
+  // NOTE: the standalone /dev/inspect/*.html dev tools hand-mirror these neutral/background hex tokens
+  // (they intentionally have zero app imports). If you change the palette below, update those pages' CSS to match.
   colorSchemes: {
     light: {
       palette: {

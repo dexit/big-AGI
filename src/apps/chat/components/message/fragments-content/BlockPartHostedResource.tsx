@@ -1,5 +1,6 @@
 import * as React from 'react';
 import TimeAgo from 'react-timeago';
+import { useQuery } from '@tanstack/react-query';
 
 import { Box, Checkbox, CircularProgress, Dropdown, IconButton, ListDivider, ListItemDecorator, Menu, MenuButton, MenuItem, Sheet, Typography } from '@mui/joy';
 import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded';
@@ -7,9 +8,13 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DownloadIcon from '@mui/icons-material/Download';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import VerticalAlignBottomIcon from '@mui/icons-material/VerticalAlignBottom';
 
 import type { AnthropicAccessSchema } from '~/modules/llms/server/anthropic/anthropic.access';
+import type { GeminiAccessSchema } from '~/modules/llms/server/gemini/gemini.access';
+import type { OpenAIAccessSchema } from '~/modules/llms/server/openai/openai.access';
+import { geminiFileDelete, geminiFileDownloadBlob, geminiFileErrorIsGone, geminiFileGetMetadata } from '~/modules/llms/vendors/gemini/geminiFiles.client';
 
 import type { ContentScaling } from '~/common/app.theme';
 import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
@@ -19,8 +24,9 @@ import { convert_Base64_To_UInt8Array } from '~/common/util/blobUtils';
 import { createTextContentFragment, DMessageContentFragment, DMessageFragmentId, DMessageHostedResourcePart } from '~/common/stores/chat/chat.fragments';
 import { copyBlobPromiseToClipboard, copyToClipboard } from '~/common/util/clipboardUtils';
 import { downloadBlob } from '~/common/util/downloadUtils';
+import { videoPlayObjectUrl } from '~/common/util/video/videoPlayManaged';
 import { humanReadableBytes } from '~/common/util/textUtils';
-import { mimeTypeIsPlainText, mimeTypeIsSupportedImage } from '~/common/attachment-drafts/attachment.mimetypes';
+import { mimeTypeIsPlainText, mimeTypeIsSupportedImage, reverseLookupMimeType } from '~/common/attachment-drafts/attachment.mimetypes';
 import { useAIPreferencesStore } from '~/common/stores/store-ai';
 import { useLlmServiceAccess } from '~/common/stores/llms/hooks/useLlmServiceAccess';
 import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
@@ -44,6 +50,16 @@ function _base64ResponseToBlob({ base64Data, mimeType }: { base64Data: string; m
     httpMimeIsText: mimeTypeIsPlainText(mimeType),
     httpMimeIsImage: mimeTypeIsSupportedImage(mimeType),
   };
+}
+
+// OpenAI container files have no pre-download metadata, so we gate the chip's "Embed" on the citation filename's
+// extension: reverse-lookup the mime, then reuse mimeTypeIsPlainText (so binary like pdf/xlsx/png stays download-only).
+// The real downloaded content-type is checked again as a backstop in handleInline.
+function _filenameLooksTextual(filename: string): boolean {
+  const dot = filename.lastIndexOf('.');
+  if (dot < 0) return false;
+  const mimeType = reverseLookupMimeType(filename.slice(dot + 1).toLowerCase());
+  return !!mimeType && mimeTypeIsPlainText(mimeType);
 }
 
 
@@ -324,6 +340,304 @@ function AnthropicFileChip(props: {
   );
 }
 
+function OpenAIContainerFileChip(props: {
+  access: OpenAIAccessSchema,
+  containerId: string,
+  fileId: string,
+  filename?: string,
+  onFragmentDelete?: () => void,
+  onFragmentReplace?: (newFragment: DMessageContentFragment) => void,
+}) {
+
+  // state
+  const [busy, setBusy] = React.useState<false | 'download' | 'copy' | 'inline'>(false);
+  const [actionError, setActionError] = React.useState<string | null>(null);
+
+  // props
+  const { access, containerId, fileId, filename, onFragmentDelete, onFragmentReplace } = props;
+
+  // external state - download on-demand (no metadata endpoint: filename comes from the citation annotation)
+  const { data: fileContent, refetch: refetchFileContent } = apiQuery.llmOpenAI.containerFileDownload.useQuery({ access, containerId, fileId }, {
+    enabled: false, // on-demand only
+    select: _base64ResponseToBlob,
+  });
+
+  // derive display info
+  const fileName = filename || fileId;
+  const displayName = fileName.length > 40 ? fileName.slice(0, 20) + '...' + fileName.slice(-15) : fileName;
+
+
+  // handlers
+
+  const handleDownload = React.useCallback(async () => {
+    setBusy('download');
+    setActionError(null);
+    try {
+      const data = fileContent || (await refetchFileContent({ cancelRefetch: false, throwOnError: true })).data;
+      data && downloadBlob(data.blob, fileName);
+    } catch (error: any) {
+      setActionError(error?.message || 'Download failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [fileContent, refetchFileContent, fileName]);
+
+  const handleCopy = React.useCallback(async () => {
+    setBusy('copy');
+    setActionError(null);
+    try {
+      const data = fileContent || (await refetchFileContent({ cancelRefetch: false, throwOnError: true })).data;
+      if (!data) return;
+      if (data.httpMimeIsText)
+        copyToClipboard(await data.blob.text(), fileName);
+      else
+        copyBlobPromiseToClipboard(data.httpMimeType, Promise.resolve(data.blob), fileName);
+    } catch (error: any) {
+      setActionError(error?.message || 'Copy failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [fileContent, refetchFileContent, fileName]);
+
+  const handleInline = React.useCallback(async () => {
+    if (!onFragmentReplace) return;
+    setBusy('inline');
+    setActionError(null);
+    try {
+      const data = fileContent || (await refetchFileContent({ cancelRefetch: false, throwOnError: true })).data;
+      if (!data) return;
+      // backstop the extension gate with the real downloaded content-type
+      if (!data.httpMimeIsText) {
+        setActionError('Cannot embed this file type');
+        return;
+      }
+      const text = await data.blob.text();
+      // adaptive fence depth (extra backticks if the content itself contains ```)
+      let fence = '```';
+      while (text.includes(fence) && fence.length < 10) fence += '`';
+      onFragmentReplace(createTextContentFragment(`${fence}${fileName}\n${text}\n${fence}\n`));
+    } catch (error: any) {
+      setActionError(error?.message || 'Embed failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [fileContent, refetchFileContent, fileName, onFragmentReplace]);
+
+
+  const isBusy = !!busy;
+  const hasError = !!actionError;
+  const canInline = !!onFragmentReplace && _filenameLooksTextual(fileName);
+
+  return (
+    <Sheet
+      variant='soft'
+      color='primary'
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        mx: 1.5,
+        px: 1.125,
+        py: 0.5,
+        borderRadius: 'sm',
+        overflow: 'hidden',
+        maxWidth: '100%',
+        boxShadow: 'inset 1px 2px 2px -2px rgba(0, 0, 0, 0.2)',
+      }}
+    >
+      <AttachFileRoundedIcon sx={{ fontSize: 'lg', opacity: 0.5 }} />
+
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Box className='agi-ellipsize' sx={{ fontSize: 'sm', fontWeight: 'md', color: hasError ? 'var(--joy-palette-danger-plainColor)' : undefined }}>
+          {hasError ? `${displayName} - ${actionError}` : displayName}
+        </Box>
+        <Box sx={{ fontSize: 'xs', opacity: 0.6 }}>
+          OpenAI container file
+        </Box>
+      </Box>
+
+      <GoodTooltip title='Copy to clipboard'>
+        <IconButton variant='soft' color='primary' disabled={isBusy} onClick={handleCopy} size='sm'>
+          {busy === 'copy' ? <CircularProgress size='sm' /> : <ContentCopyIcon sx={{ fontSize: 'lg' }} />}
+        </IconButton>
+      </GoodTooltip>
+      {canInline && (
+        <GoodTooltip title='Embed as text in the message'>
+          <IconButton variant='soft' color='primary' disabled={isBusy} onClick={handleInline} size='sm'>
+            {busy === 'inline' ? <CircularProgress size='sm' /> : <VerticalAlignBottomIcon sx={{ fontSize: 'lg' }} />}
+          </IconButton>
+        </GoodTooltip>
+      )}
+      <GoodTooltip title='Download file'>
+        <IconButton variant='soft' color='primary' disabled={isBusy} onClick={handleDownload} size='sm'>
+          {busy === 'download' ? <CircularProgress size='sm' /> : <DownloadIcon sx={{ fontSize: 'lg' }} />}
+        </IconButton>
+      </GoodTooltip>
+      {!!onFragmentDelete && (
+        <GoodTooltip title='Remove from message'>
+          <IconButton variant='plain' color='danger' disabled={isBusy} onClick={onFragmentDelete} size='sm'>
+            <DeleteOutlineIcon sx={{ fontSize: 'lg' }} />
+          </IconButton>
+        </GoodTooltip>
+      )}
+    </Sheet>
+  );
+}
+
+
+function GeminiFileChip(props: {
+  access: GeminiAccessSchema,
+  fileName: string,
+  mimeType: string,
+  isVideo: boolean,
+  onFragmentDelete?: () => void,
+}) {
+
+  // state
+  const [busy, setBusy] = React.useState<false | 'download' | 'play' | 'delete'>(false);
+  const [actionError, setActionError] = React.useState<string | null>(null);
+  const { showPromisedOverlay } = useOverlayComponents();
+
+  // props
+  const { access, fileName, mimeType, isVideo, onFragmentDelete } = props;
+
+  // external state - metadata (size/expiry/state). CSF-aware: fetches Google directly when access.clientSideFetch is
+  // set (key stays client-side), else via the key-proxied tRPC route - see geminiFiles.client.ts. Keyed per
+  // {host, fileName} (fileName is globally unique), so switching chats hits cache with no reload.
+  const { data: metadata, isLoading: metaLoading, error: metaError } = useQuery({
+    queryKey: ['gemini-file-metadata', access.geminiHost, fileName],
+    queryFn: () => geminiFileGetMetadata(access, fileName),
+    staleTime: Infinity, // metadata (size/expiry) is immutable once ACTIVE -> never refetch
+    // the file reports PROCESSING right after generation and flips to ACTIVE within a few seconds - poll ONLY until
+    // then so the 'processing…' label clears itself; at ACTIVE the interval returns false and staleTime:Infinity keeps it quiet forever
+    refetchInterval: (query) => (query.state.data?.state === 'PROCESSING' ? 3000 : false),
+  });
+
+  // derived
+  const shortId = fileName.replace(/^files\//, '');
+  const ext = mimeType.split(';')[0].trim().split('/')[1] || 'bin';
+  const downloadName = `gemini-${shortId}.${ext}`;
+  const displayName = isVideo ? 'Gemini Generated Video' : 'Generated file';
+  const isFileGone = geminiFileErrorIsGone(metaError);
+  const isProcessing = metadata?.state === 'PROCESSING';
+  const isBusy = !!busy || metaLoading;
+  const hasError = !!actionError || (!!metaError && !isFileGone);
+
+
+  // handlers
+
+  const getBlob = React.useCallback(() => geminiFileDownloadBlob(access, fileName), [access, fileName]);
+
+  const handleDownload = React.useCallback(async () => {
+    setBusy('download');
+    setActionError(null);
+    try {
+      const blob = await getBlob();
+      blob && downloadBlob(blob, downloadName);
+    } catch (error: any) {
+      setActionError(error?.message || 'Download failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [getBlob, downloadName]);
+
+  const handlePlay = React.useCallback(async () => {
+    setBusy('play');
+    setActionError(null);
+    try {
+      const blob = await getBlob();
+      // reuse the ephemeral fullscreen overlay (revokes the object URL on close) - same playback as inline video
+      blob && videoPlayObjectUrl(URL.createObjectURL(blob), 'AI Video');
+    } catch (error: any) {
+      setActionError(error?.message || 'Play failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [getBlob]);
+
+  const handleDelete = React.useCallback(async (event: React.MouseEvent) => {
+    if (!onFragmentDelete) return;
+    // confirm (shift-click to skip) - deletes the video from Google now; it would otherwise auto-expire in ~48h
+    if (!event.shiftKey && !await showPromisedOverlay('chat-message-delete-hosted-resource', { rejectWithValue: false }, ({ onResolve, onUserReject }) =>
+      <ConfirmationModal
+        open onClose={onUserReject} onPositive={() => onResolve(true)}
+        confirmationText={<>Delete this generated video from Google now?<br />It would otherwise auto-expire in ~48h.</>}
+        positiveActionText='Delete'
+      />,
+    )) return;
+    setBusy('delete');
+    // best-effort remote delete (CSF-aware; a 404 just means it already expired), then drop the fragment
+    geminiFileDelete(access, fileName).catch(console.error);
+    onFragmentDelete();
+  }, [access, fileName, onFragmentDelete, showPromisedOverlay]);
+
+
+  return (
+    <Sheet
+      variant='soft'
+      color='primary'
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        mx: 1.5,
+        px: 1.125,
+        py: 0.5,
+        borderRadius: 'sm',
+        overflow: 'hidden',
+        maxWidth: '100%',
+        boxShadow: 'inset 1px 2px 2px -2px rgba(0, 0, 0, 0.2)',
+      }}
+    >
+      <AttachFileRoundedIcon sx={{ fontSize: 'lg', opacity: 0.5 }} />
+
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Box className='agi-ellipsize' sx={{ fontSize: 'sm', fontWeight: 'md', color: hasError ? 'var(--joy-palette-danger-plainColor)' : undefined }}>
+          {metaLoading ? 'Loading...' : isFileGone ? 'Video no longer available (expired)' : hasError ? `${displayName} - ${actionError || 'Could not load file info'}` : displayName}
+        </Box>
+        {metadata && !isFileGone && (
+          <Box sx={{ fontSize: 'xs', opacity: 0.6 }}>
+            {humanReadableBytes(metadata.sizeBytes)}
+            {metadata.expirationTime && <> · expires <TimeAgo date={metadata.expirationTime} /></>}
+            {isProcessing && ' · processing…'}
+          </Box>
+        )}
+      </Box>
+
+      {!isFileGone ? <>
+
+        {isVideo && (
+          <GoodTooltip title='Play'>
+            <IconButton variant='soft' color='primary' disabled={isBusy} onClick={handlePlay} size='sm'>
+              {busy === 'play' ? <CircularProgress size='sm' /> : <PlayArrowRoundedIcon sx={{ fontSize: 'lg' }} />}
+            </IconButton>
+          </GoodTooltip>
+        )}
+        <GoodTooltip title='Download file'>
+          <IconButton variant='soft' color='primary' disabled={isBusy} onClick={handleDownload} size='sm'>
+            {busy === 'download' ? <CircularProgress size='sm' /> : <DownloadIcon sx={{ fontSize: 'lg' }} />}
+          </IconButton>
+        </GoodTooltip>
+        {!!onFragmentDelete && (
+          <GoodTooltip title='Delete from Google & remove'>
+            <IconButton variant='plain' color='danger' disabled={isBusy} onClick={handleDelete} size='sm'>
+              {busy === 'delete' ? <CircularProgress size='sm' /> : <DeleteOutlineIcon sx={{ fontSize: 'lg' }} />}
+            </IconButton>
+          </GoodTooltip>
+        )}
+
+      </> : onFragmentDelete && (
+        <GoodTooltip title='Remove from message'>
+          <IconButton variant='plain' color='danger' onClick={onFragmentDelete} size='sm'>
+            <DeleteOutlineIcon sx={{ fontSize: 'lg' }} />
+          </IconButton>
+        </GoodTooltip>
+      )}
+    </Sheet>
+  );
+}
+
+
 function NoAccessChip(props: { fileId: string }) {
   return (
     <Sheet variant='outlined' sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5, borderRadius: 'sm' }}>
@@ -356,23 +670,45 @@ export function BlockPartHostedResource(props: {
     onFragmentReplace?.(fragmentId, newFragment);
   }, [fragmentId, onFragmentReplace]);
 
-  // TODO: OpenAI container_file_citation support (via: 'openai' with fileId + containerId)?
+  // reactive service + access resolution (hooks must run unconditionally - gated by the resolved 'via')
+  const antAccess = useLlmServiceAccess(resource.via === 'anthropic' ? props.messageGeneratorLlmId : undefined, 'anthropic');
+  const oaiAccess = useLlmServiceAccess(resource.via === 'openai-container' ? props.messageGeneratorLlmId : undefined, 'openai');
+  const gemAccess = useLlmServiceAccess(resource.via === 'gemini-file' ? props.messageGeneratorLlmId : undefined, 'googleai');
 
-  // reactive service + access resolution
-  const isAnthropic = resource.via === 'anthropic';
-  const antAccess = useLlmServiceAccess(isAnthropic ? props.messageGeneratorLlmId : undefined, 'anthropic');
+  if (resource.via === 'anthropic' && antAccess)
+    return (
+      <AnthropicFileChip
+        access={antAccess}
+        fileId={resource.fileId}
+        contentScaling={props.contentScaling}
+        onFragmentDelete={onFragmentDelete ? handleFragmentDelete : undefined}
+        onFragmentReplace={onFragmentReplace ? handleFragmentReplace : undefined}
+      />
+    );
 
-  // only support Anthropic files for now
-  if (!isAnthropic || !antAccess)
-    return <NoAccessChip fileId={resource?.fileId || 'unknown'} />;
+  if (resource.via === 'openai-container' && oaiAccess)
+    return (
+      <OpenAIContainerFileChip
+        access={oaiAccess}
+        containerId={resource.containerId}
+        fileId={resource.fileId}
+        filename={resource.filename}
+        onFragmentDelete={onFragmentDelete ? handleFragmentDelete : undefined}
+        onFragmentReplace={onFragmentReplace ? handleFragmentReplace : undefined}
+      />
+    );
 
-  return (
-    <AnthropicFileChip
-      access={antAccess}
-      fileId={resource.fileId}
-      contentScaling={props.contentScaling}
-      onFragmentDelete={onFragmentDelete ? handleFragmentDelete : undefined}
-      onFragmentReplace={onFragmentReplace ? handleFragmentReplace : undefined}
-    />
-  );
+  if (resource.via === 'gemini-file' && gemAccess)
+    return (
+      <GeminiFileChip
+        access={gemAccess}
+        fileName={resource.fileName}
+        mimeType={resource.mimeType}
+        isVideo={!!resource.isVideo}
+        onFragmentDelete={onFragmentDelete ? handleFragmentDelete : undefined}
+      />
+    );
+
+  const fallbackLabel = !resource ? 'unknown' : 'fileId' in resource ? resource.fileId : 'fileName' in resource ? resource.fileName : 'unknown';
+  return <NoAccessChip fileId={fallbackLabel} />;
 }

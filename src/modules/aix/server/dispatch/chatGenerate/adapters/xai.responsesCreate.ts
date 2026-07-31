@@ -95,13 +95,16 @@ export function aixToXAIResponses(
   }
 
   // Reasoning
+  // - grok-4.5:                  low/medium/high/xhigh (always-on reasoning, 'none' rejected)
+  // - grok-4.3:                  none/low(default)/medium/high
+  // - grok-4.20-multi-agent:     low/medium/high/xhigh (4 vs 16 agents)
+  // - grok-4.20 reasoning/non-reasoning: no effort param (slug selects mode)
   const reasoningEffort = model.reasoningEffort; // ?? model.vndOaiReasoningEffort;
-  if (reasoningEffort === 'none' || reasoningEffort === 'minimal' || reasoningEffort === 'xhigh' || reasoningEffort === 'max') // domain validation
+  if (reasoningEffort === 'minimal' || reasoningEffort === 'max') // domain validation: still unsupported
     throw new Error(`XAI Responses API does not support reasoning effort '${reasoningEffort}'`);
 
-  // Always request detailed reasoning summaries - grok-4.3 and others have always-on reasoning
-  // but only return summary text when explicitly requested. Also set effort when configured
-  // (only grok-4.20-multi-agent supports effort).
+  // Always request detailed reasoning summaries - grok-4.3 and others have reasoning enabled by default
+  // but only return summary text when explicitly requested. Also set effort when configured.
   payload.reasoning = {
     ...(reasoningEffort ? { effort: reasoningEffort } : {}),
     summary: 'detailed',
@@ -320,6 +323,9 @@ function _toXAIResponsesInput(
                   newFunctionCallItem(part.id, invocation.name, invocation.args || '');
                   break;
                 case 'code_execution':
+                  // NOTE: unlike OpenAI Responses (canonical 'code_interpreter_call' round-trip + container reuse),
+                  // xAI history still collapses this to a fake 'execute_code' function_call. xAI has no container concept
+                  // ([XAI-UNSUPPORTED] in xai.wiretypes.ts) and its code-execution continuity is unverified - revisit if needed.
                   newFunctionCallItem(part.id, 'execute_code', invocation.code || '');
                   break;
                 default:
@@ -462,8 +468,9 @@ function _toXAIToolChoice(policy: AixTools_ToolsPolicy): XAIWire_Responses_Tools
       return 'auto';
     case 'any':
       return 'required';
-    case 'function_call':
-      return { type: 'function', name: policy.function_call.name };
+    // DISABLED 2026-07-17 - forced named tool, see ToolsPolicy_schema
+    // case 'function_call':
+    //   return { type: 'function', name: policy.function_call.name };
     default:
       const _exhaustiveCheck: never = policy;
       throw new Error(`Unsupported XAI tools policy type: ${(policy as any).type}`);

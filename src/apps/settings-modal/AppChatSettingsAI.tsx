@@ -62,8 +62,13 @@ function FormControlDomainModel(props: {
 }) {
 
   // external state
-  const { domainModelId: fastModelId, assignDomainModelId: setFastModelId } = useModelDomain(props.domainId);
-  const [_llm, llmComponent] = useLLMSelect(fastModelId, setFastModelId, { label: '', autoRefreshDomain: props.domainId });
+  const { domainModelId, assignDomainModelId, assignDomainModelAuto, resolvedModelIsAuto, autoModelLabel } = useModelDomain(props.domainId);
+  const [_llm, llmComponent] = useLLMSelect(domainModelId, assignDomainModelId, {
+    label: '',
+    setLlmToAuto: assignDomainModelAuto,
+    isLlmAuto: resolvedModelIsAuto,
+    autoModelLabel,
+  });
 
   return (
     <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between' }}>

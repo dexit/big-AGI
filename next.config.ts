@@ -32,6 +32,10 @@ buildType && console.log(` 🧠 big-AGI: building for ${buildType}...\n`);
 let nextConfig: NextConfig = {
   reactStrictMode: !process.env.NO_STRICT_MODE, // default: enabled
 
+  // build-time lint: default ON (a build is the last gate); NO_LINT_BUILD=1 skips the ~15s
+  // typed pass when CI already ran `npm run lint` as its own step
+  eslint: { ignoreDuringBuilds: !!process.env.NO_LINT_BUILD },
+
   // [exports] https://nextjs.org/docs/advanced-features/static-html-export
   ...(buildType && {
     output: buildType,
@@ -43,6 +47,10 @@ let nextConfig: NextConfig = {
     // Optional: Change links `/me` -> `/me/` and emit `/me.html` -> `/me/index.html`
     // trailingSlash: true,
   }),
+
+  // Allow running builds without racing over .next/ - if set takes precedence over the 'dist' above
+  // However note this will cause issues with "include" in tsconfig.json, which assumes 'dist'
+  ...(process.env.AGI_DIST_DIR && { distDir: process.env.AGI_DIST_DIR }),
 
   // [puppeteer] https://github.com/puppeteer/puppeteer/issues/11052
   // NOTE: we may not be needing this anymore, as we use '@cloudflare/puppeteer'
@@ -97,22 +105,14 @@ let nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true, // required to support PostHog trailing slash API requests
   async rewrites() {
     return [
-      {
-        source: '/a/ph/static/:path*',
-        destination: 'https://us-assets.i.posthog.com/static/:path*',
-      },
-      {
-        source: '/a/ph/:path*',
-        destination: 'https://us.i.posthog.com/:path*',
-      },
-      {
-        source: '/a/ph/decide',
-        destination: 'https://us.i.posthog.com/decide',
-      },
-      {
-        source: '/a/ph/flags',
-        destination: 'https://us.i.posthog.com/flags',
-      },
+      { source: '/a/ph/static/:path*', destination: 'https://us-assets.i.posthog.com/static/:path*' },
+      { source: '/a/ph/array/:path*', destination: 'https://us-assets.i.posthog.com/array/:path*' },
+      { source: '/a/ph/:path*', destination: 'https://us.i.posthog.com/:path*' },
+      // Dev tools hub: unified index at /dev (static page in /public/dev/index.html)
+      { source: '/dev', destination: '/dev/index.html' },
+      // Inspect: standalone static dev tools under /public/dev/inspect/*.html (clean URLs, no .html)
+      // The (\w+) constraint excludes paths with a dot, so '/dev/inspect/storage.html' is still served directly.
+      { source: '/dev/inspect/:tool(\\w+)', destination: '/dev/inspect/:tool.html' },
     ];
   },
 

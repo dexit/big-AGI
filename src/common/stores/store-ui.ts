@@ -45,6 +45,9 @@ interface UIPreferencesStore {
   showPersonaFinder: boolean;
   setShowPersonaFinder: (showPersonaFinder: boolean) => void;
 
+  showModelsFn: boolean; // =false, DEV only
+  setShowModelsFn: (showModelsFn: boolean) => void;
+
   showModelsHidden: boolean;
   setShowModelsHidden: (showModelsHidden: boolean) => void;
 
@@ -120,7 +123,10 @@ export const useUIPreferencesStore = create<UIPreferencesStore>()(
       showPersonaFinder: false,
       setShowPersonaFinder: (showPersonaFinder: boolean) => set({ showPersonaFinder }),
 
-      showModelsHidden: false,
+      showModelsFn: false,
+      setShowModelsFn: (showModelsFn: boolean) => set({ showModelsFn }),
+
+      showModelsHidden: true,
       setShowModelsHidden: (showModelsHidden: boolean) => set({ showModelsHidden }),
 
       showModelsStarredOnly: false,
@@ -216,6 +222,10 @@ export function useUIComplexityIsMinimal(): boolean {
 
 export function useUIContentScaling(): ContentScaling {
   return useUIPreferencesStore((state) => state.contentScaling);
+}
+
+export function getUIEnterIsNewline(): boolean {
+  return useUIPreferencesStore.getState().enterIsNewline;
 }
 
 export function getAixInspectorEnabled(): boolean {
