@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { Autocomplete, AutocompleteOption, Box, FormControl, FormHelperText, FormLabel, ListItemDecorator, Typography } from '@mui/joy';
-import InfoIcon from '@mui/icons-material/Info';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { Link } from '~/common/components/Link';
@@ -10,7 +10,6 @@ import { ArceeAIIcon } from '~/common/components/icons/vendors/ArceeAIIcon';
 import { ChutesAIIcon } from '~/common/components/icons/vendors/ChutesAIIcon';
 import { FireworksAIIcon } from '~/common/components/icons/vendors/FireworksAIIcon';
 import { CloudflareIcon } from '~/common/components/icons/vendors/CloudflareIcon';
-import { HeliconeIcon } from '~/common/components/icons/vendors/HeliconeIcon';
 import { MiniMaxIcon } from '~/common/components/icons/vendors/MiniMaxIcon';
 import { NovitaAIIcon } from '~/common/components/icons/vendors/NovitaAIIcon';
 
@@ -40,12 +39,12 @@ const OPENAI_COMPATIBLE_PROVIDERS: VerifiedProvider[] = [
   // Example Providers
   { id: 'arcee', label: 'Arcee AI', host: 'https://api.arcee.ai/api', hostMatch: 'arcee.ai', category: 'Example Providers', description: 'Open-weight MoE models', docsUrl: 'https://docs.arcee.ai/', icon: ArceeAIIcon },
   { id: 'chutes', label: 'Chutes AI', host: 'https://llm.chutes.ai', hostMatch: '.chutes.ai', category: 'Example Providers', description: 'Serverless open model inference', docsUrl: 'https://chutes.ai/docs', icon: ChutesAIIcon },
+  { id: 'empiriolabs', label: 'EmpirioLabs AI', host: 'https://api.empiriolabs.ai', hostMatch: 'empiriolabs.ai', category: 'Example Providers', description: 'Multi-model API platform', docsUrl: 'https://docs.empiriolabs.ai' },
   { id: 'fireworks', label: 'Fireworks AI', host: 'https://api.fireworks.ai/inference', hostMatch: 'fireworks.ai', category: 'Example Providers', description: 'Fast open model inference', docsUrl: 'https://docs.fireworks.ai/getting-started/quickstart', icon: FireworksAIIcon },
   { id: 'llmapi', label: 'LLM API', host: 'https://api.llmapi.ai', hostMatch: 'llmapi.ai', category: 'Example Providers', description: 'Multi-provider API gateway', docsUrl: 'https://llmapi.ai' },
   { id: 'minimax', label: 'MiniMax', host: 'https://api.minimax.io', hostMatch: 'minimax.io', category: 'Example Providers', description: 'Proprietary reasoning models', docsUrl: 'https://platform.minimax.io/docs', icon: MiniMaxIcon },
   { id: 'novita', label: 'Novita AI', host: 'https://api.novita.ai/openai', hostMatch: 'novita.ai', category: 'Example Providers', description: 'Budget open model inference', docsUrl: 'https://novita.ai/docs', icon: NovitaAIIcon },
   // Example Proxies
-  { id: 'helicone', label: 'Helicone', host: 'https://oai.hconeai.com', hostMatch: 'hconeai.com', category: 'Example Proxies', description: 'Observability and caching proxy', docsUrl: 'https://docs.helicone.ai/getting-started/quick-start', icon: HeliconeIcon },
   { id: 'cloudflare', label: 'Cloudflare AI Gateway', host: 'https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openai', hostMatch: 'gateway.ai.cloudflare.com', category: 'Example Proxies', description: 'Caching and analytics gateway', docsUrl: 'https://developers.cloudflare.com/ai-gateway/', icon: CloudflareIcon },
 ];
 
@@ -109,7 +108,7 @@ export function OpenAIHostAutocomplete(props: {
         <FormLabel sx={{ flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
           API Endpoint
           <GoodTooltip title={`An OpenAI compatible endpoint to be used in place of 'api.openai.com'.\n\nSelect a verified provider from the list, or type any custom URL.`} arrow placement='top'>
-            <InfoIcon sx={{ ml: 0.5, cursor: 'pointer', fontSize: 'md', color: 'primary.solidBg' }} />
+            <InfoOutlinedIcon sx={{ ml: 0.5, cursor: 'pointer', fontSize: 'md', color: 'primary.solidBg' }} />
           </GoodTooltip>
         </FormLabel>
         {rightLabel && <FormHelperText sx={{ display: 'block' }}>{rightLabel}</FormHelperText>}

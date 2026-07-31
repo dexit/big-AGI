@@ -13,6 +13,35 @@ const hotFixAntShipNoEmptyTextBlocks = true; // Replace empty text blocks with a
  *
  * ## Updates
  *
+ * ### 2026-06-30 - API Sync: new tool versions, refusal categories, Sonnet 5 verified
+ * - Tools: Added web_search_20260318 / web_fetch_20260318 (GA, 2026-06-11) - adds `response_inclusion` ('full'|'excluded')
+ *   to drop the nested search/fetch call+result pair from the response once consumed by a completed code-execution call
+ *   (dynamic filtering). Wired as the new default for the dynamic-filtering path (replacing _20260209); `response_inclusion`
+ *   left unset (defaults to 'full') - this is purely the version bump, no behavior change.
+ * - StopDetails.category: added 'frontier_llm', 'military_weapons' (current docs list these alongside 'cyber'/'bio'/'reasoning_extraction')
+ * - Verified empirically against the live API: Claude Sonnet 5 (launched 2026-06-29) breaking changes (temperature/top_p/top_k
+ *   rejected, manual thinking budget rejected, but thinking.disabled and forced tool_choice both OK unlike Fable/Mythos 5) -
+ *   existing adapter logic already handles all of these correctly via LLM_IF_HOTFIX_NoTemperature + per-model thinking-budget plumbing.
+ * - NOT adopted (tracked in anthropic.parser.ts top comment): mid-conversation system messages (role: 'system', Opus 4.8
+ *   only, GA 2026-05-28) - appends operator-priority instructions mid-`messages` without invalidating the cached prefix.
+ *
+ * ### 2026-06-09 - API Sync: Claude Fable 5 / Mythos 5, forward-compatible parsing
+ * - StopDetails.category: added 'reasoning_extraction' (Fable 5 ToS classifier for reverse engineering / output duplication)
+ * - StopDetails: added `recommended_model` (suggested retry model when a server-side fallback could not run)
+ * - StopReason: tolerant parsing - future values (e.g. 'compaction' from the compact-2026-01-12 beta) must not kill the stream
+ * - ContentBlockOutput: resilient parsing of unknown/future block types ('fallback', 'compaction', 'advisor_tool_result', 'connector_text' - all beta-gated as of today)
+ * - event_ContentBlockDelta: resilient parsing of unknown delta types (e.g. 'compaction_delta')
+ * - WebFetchToolResultError: added 'url_not_in_prior_context' error code
+ * - Models: claude-fable-5 / claude-mythos-5 are adaptive-thinking-only ('enabled'/'disabled' return 400, no prefill, display defaults 'omitted') - coerced in the adapter
+ * - Fable/Mythos 5 tool calling (empirical, 14-case matrix): auto/parallel/disable_parallel/chaining/error-retry/streaming all OK; forced
+ *   tool_choice ('any'/'tool') returns 400 at the model level - the adapter downgrades to 'auto' + a system hint (empirically equivalent);
+ *   'none' with tools returns 200 with EMPTY content (big-AGI never sends 'none'); thinking blocks may be replayed verbatim OR stripped
+ *   (no signature enforcement on replay - we keep replaying them per the documented contract)
+ * - NOT adopted (beta): `fallbacks` param (server-side-fallback-2026-06-01), advisor tool, compaction, cache diagnostics, task budgets, mid-conversation system messages (role: 'system')
+ *
+ * ### 2026-05-28 - API Sync: reasoning token breakdown
+ * - Response.usage + event_MessageDelta.usage: added `output_tokens_details` ({ thinking_tokens }) - subset of output_tokens, surfaced as the TOutR metric (like OpenAI/Gemini)
+ *
  * ### 2026-04-24 - API Sync: stop_details for structured refusals
  * - Response: added `stop_details` ({ type: 'refusal', category: 'cyber'|'bio'|null, explanation: string|null })
  * - event_MessageDelta.delta: added `stop_details` (arrives alongside stop_reason in streaming)
@@ -321,10 +350,8 @@ export namespace AnthropicWire_Blocks {
       }),
       z.object({
         type: z.literal('web_fetch_tool_result_error'),
-        error_code: z.union([
-          z.enum(['invalid_tool_input', 'url_too_long', 'url_not_allowed', 'url_not_accessible', 'unsupported_content_type', 'too_many_requests', 'max_uses_exceeded', 'unavailable']),
-          z.string(), // forward-compatibility
-        ]),
+        error_code: z.enum(['invalid_tool_input', 'url_too_long', 'url_not_allowed', 'url_not_in_prior_context', 'url_not_accessible', 'unsupported_content_type', 'too_many_requests', 'max_uses_exceeded', 'unavailable'])
+          .or(z.string()), // forward-compatibility
       }),
     ]),
     caller: _ToolUseCaller_schema.optional(),
@@ -539,7 +566,10 @@ export namespace AnthropicWire_Messages {
   ]);
 
   export const MessageInput_schema = z.object({
-    role: z.enum(['user', 'assistant']),
+    role: z.enum([
+      'user', 'assistant',
+      // 'system', // [2026-06-09] we don't want to support this role for now, for uniformity with other ai providers; however we may want to specialize some high-level AIX parts to these in the future
+    ]),
     content: z.array(_ContentBlockInput_schema), // NOTE: could be a string (see below), but we force it to be an array
     // content: z.union([z.string(), z.array(_ContentBlockInput_schema)]),
   });
@@ -574,6 +604,28 @@ export namespace AnthropicWire_Messages {
     AnthropicWire_Blocks.ContainerUploadBlock_schema,
     AnthropicWire_Blocks.ToolSearchToolResultBlock_schema, // [Anthropic, 2025-11-24] Tool Search Tool
   ]);
+
+  /// Forward-compatibility (2026-06-09): unknown/future output block types must not kill the stream
+
+  /** Runtime set of the known output block types - derived from ContentBlockOutput_schema. */
+  const _contentBlockOutputKnownTypes: ReadonlySet<string> = new Set<string>(
+    ContentBlockOutput_schema.options.map(option => option.shape.type.value),
+  );
+
+  /**
+   * Loose-parses output blocks with unknown types (e.g. 'fallback', 'compaction', 'advisor_tool_result', 'connector_text' - all beta-gated as of 2026-06-09).
+   * Known types are excluded, so malformed known blocks still fail validation instead of degrading silently.
+   */
+  const _ContentBlockOutputUnknown_schema = z.looseObject({
+    type: z.string().refine(type => !_contentBlockOutputKnownTypes.has(type)),
+  });
+
+  /** ContentBlockOutput with a loose fallback for unknown/future block types - parsers must gate on isKnownContentBlockOutput() before processing. */
+  export const ContentBlockOutputResilient_schema = z.union([ContentBlockOutput_schema, _ContentBlockOutputUnknown_schema]);
+
+  export function isKnownContentBlockOutput(block: z.infer<typeof ContentBlockOutputResilient_schema>): block is z.infer<typeof ContentBlockOutput_schema> {
+    return _contentBlockOutputKnownTypes.has(block.type);
+  }
 }
 
 export namespace AnthropicWire_Skills {
@@ -762,6 +814,18 @@ export namespace AnthropicWire_Tools {
     use_cache: z.boolean().optional(), // default true; set false to bypass cache and fetch fresh content
   });
 
+  /**
+   * [Anthropic, 2026-06-11 GA] Latest - adds `response_inclusion`.
+   * When the fetch was called programmatically from a completed code-execution call (dynamic filtering), 'excluded'
+   * drops the nested server_tool_use(web_fetch) + web_fetch_tool_result pair from the response entirely (verified
+   * empirically: ~98% response size reduction on a full page fetch). Default 'full' (unchanged from prior versions).
+   * Direct calls, or code-execution calls that paused before completing, are always returned in full regardless.
+   */
+  const _WebFetchTool_20260318_schema = _WebFetchTool_20260309_schema.extend({
+    type: z.literal('web_fetch_20260318'),
+    response_inclusion: z.enum(['full', 'excluded']).optional(), // default: 'full'
+  });
+
   // -- Web Search Tools --
 
   const _WebSearchTool_20250305_schema = _ToolDefinitionBase_schema.extend({
@@ -773,9 +837,15 @@ export namespace AnthropicWire_Tools {
     user_location: z.any().nullish(), // UserLocation schema
   });
 
-  /** [Anthropic, Feb 2026 GA] Web search v2 - latest. */
+  /** [Anthropic, Feb 2026 GA] Web search v2. */
   const _WebSearchTool_20260209_schema = _WebSearchTool_20250305_schema.extend({
     type: z.literal('web_search_20260209'),
+  });
+
+  /** [Anthropic, 2026-06-11 GA] Latest - adds `response_inclusion`, see _WebFetchTool_20260318_schema for semantics. */
+  const _WebSearchTool_20260318_schema = _WebSearchTool_20260209_schema.extend({
+    type: z.literal('web_search_20260318'),
+    response_inclusion: z.enum(['full', 'excluded']).optional(), // default: 'full'
   });
 
 
@@ -795,8 +865,10 @@ export namespace AnthropicWire_Tools {
     _WebFetchTool_20250910_schema,
     _WebFetchTool_20260209_schema,
     _WebFetchTool_20260309_schema,
+    _WebFetchTool_20260318_schema,
     _WebSearchTool_20250305_schema,
     _WebSearchTool_20260209_schema,
+    _WebSearchTool_20260318_schema,
   ]);
 
 }
@@ -818,6 +890,9 @@ export namespace AnthropicWire_API_Message_Create {
    * - 'pause_turn': paused for server tools (e.g. web search)
    * - 'refusal': Claude refused due to safety concerns
    * - 'model_context_window_exceeded': hit the model's context window limit
+   *
+   * Tolerant parsing: unknown values (e.g. 'compaction' from the compact-2026-01-12 beta) must
+   * not kill the stream - the parser routes them through aixResilientUnknownValue.
    */
   const StopReason_schema = z.enum([
     'end_turn',
@@ -827,7 +902,7 @@ export namespace AnthropicWire_API_Message_Create {
     'pause_turn',
     'refusal',
     'model_context_window_exceeded',
-  ]);
+  ]).or(z.string());
 
   /**
    * Structured stop details, paired with stop_reason. Currently only populated when stop_reason === 'refusal'.
@@ -835,8 +910,10 @@ export namespace AnthropicWire_API_Message_Create {
    */
   const StopDetails_schema = z.object({
     type: z.enum(['refusal']).or(z.string()),
-    category: z.enum(['cyber', 'bio']).or(z.string()).nullish(),
+    category: z.enum(['cyber', 'bio', 'reasoning_extraction', 'frontier_llm', 'military_weapons']).or(z.string()).nullish(),
     explanation: z.string().nullish(),
+    /** [Anthropic, 2026-06-09] Model suggested for a direct retry when a server-side fallback could not run (e.g. fallback model rate-limited). Hint only, may be null. */
+    recommended_model: z.string().nullish(),
   });
 
   /// Request
@@ -1002,8 +1079,10 @@ export namespace AnthropicWire_API_Message_Create {
     top_p: z.number().optional(),
 
     /**
-     * [Anthropic, fast-mode-2026-02-01] Accelerated inference mode.
-     * Preview/waitlist. Only supported on Claude Opus 4.6.
+     * [Anthropic, fast-mode-2026-02-01] Accelerated inference mode (research preview, waitlist; up to 2.5x OTPS at 2x price).
+     * Only supported on Claude Opus 5 and Opus 4.8 (2026-07-24: Opus 4.7 returns 400; Opus 4.6 silently runs standard,
+     * see `usage.speed`). Not available on Fable 5 / Sonnet 5, Batch API, Priority Tier, or partner clouds.
+     * Note: switching speeds invalidates the prompt cache - requests at different speeds do not share cached prefixes.
      */
     speed: z.enum(['fast']).optional(),
 
@@ -1032,9 +1111,10 @@ export namespace AnthropicWire_API_Message_Create {
 
     /**
      * OUTPUT Content generated by the model.
-     * This is an array of content blocks, each of which has a type that determines its shape. Currently, the only type in responses is "text".
+     * This is an array of content blocks, each of which has a type that determines its shape.
+     * Resilient: unknown/future block types parse loosely - parsers gate on isKnownContentBlockOutput().
      */
-    content: z.array(AnthropicWire_Messages.ContentBlockOutput_schema),
+    content: z.array(AnthropicWire_Messages.ContentBlockOutputResilient_schema),
 
     /**
      * The reason why Claude stopped generating.
@@ -1057,6 +1137,10 @@ export namespace AnthropicWire_API_Message_Create {
     usage: z.object({
       input_tokens: z.number(),
       output_tokens: z.number(),
+      // [Anthropic, 2026-05-28] reasoning token breakdown - thinking_tokens is a subset of output_tokens (already counted in it)
+      output_tokens_details: z.object({
+        thinking_tokens: z.number(),
+      }).nullish(),
       cache_creation_input_tokens: z.number().nullish(),
       cache_read_input_tokens: z.number().nullish(),
       cache_creation: z.object({
@@ -1069,6 +1153,9 @@ export namespace AnthropicWire_API_Message_Create {
         tool_search_requests: z.number().optional(), // [Anthropic, 2025-11-24] Tool Search Tool usage
       }).nullish(),
       service_tier: z.enum(['standard', 'priority', 'batch']).nullish(),
+      // [Anthropic, fast-mode-2026-02-01] actual speed used - present ONLY when the request included `speed`
+      // (probe-verified 2026-07-24: absent on standard requests; Opus 4.6 reports 'standard' on its silent fast->standard fallback)
+      speed: z.enum(['fast', 'standard']).nullish(),
       inference_geo: z.string().nullish(),
     }),
 
@@ -1124,6 +1211,10 @@ export namespace AnthropicWire_API_Message_Create {
       cache_read_input_tokens: z.number().nullish(),
       input_tokens: z.number().nullish(),
       output_tokens: z.number(),
+      // [Anthropic, 2026-05-28] reasoning token breakdown - cumulative thinking_tokens (subset of output_tokens)
+      output_tokens_details: z.object({
+        thinking_tokens: z.number(),
+      }).nullish(),
       server_tool_use: z.object({
         web_fetch_requests: z.number().optional(),
         web_search_requests: z.number().optional(),
@@ -1135,7 +1226,7 @@ export namespace AnthropicWire_API_Message_Create {
   export const event_ContentBlockStart_schema = z.object({
     type: z.literal('content_block_start'),
     index: z.number(),
-    content_block: AnthropicWire_Messages.ContentBlockOutput_schema,
+    content_block: AnthropicWire_Messages.ContentBlockOutputResilient_schema,
   });
 
   export const event_ContentBlockStop_schema = z.object({
@@ -1143,32 +1234,51 @@ export namespace AnthropicWire_API_Message_Create {
     index: z.number(),
   });
 
+  const _ContentBlockDeltaKnown_schema = z.union([
+    z.object({
+      type: z.literal('text_delta'),
+      text: z.string(),
+    }),
+    z.object({
+      type: z.literal('input_json_delta'),
+      partial_json: z.string(),
+    }),
+    z.object({
+      type: z.literal('thinking_delta'),
+      thinking: z.string(),
+    }),
+    z.object({
+      type: z.literal('signature_delta'),
+      signature: z.string(),
+    }),
+    z.object({
+      // created by the hosted web_search tool, at least, in which case the citation is: Extract<typeof _TextBlockCitations_schema, { type: 'web_search_result_location' }>
+      type: z.literal('citations_delta'),
+      citation: AnthropicWire_Blocks._TextBlockCitations_schema,
+    }),
+  ]);
+
+  /** Runtime set of the known delta types - derived from _ContentBlockDeltaKnown_schema. */
+  const _contentBlockDeltaKnownTypes: ReadonlySet<string> = new Set<string>(
+    _ContentBlockDeltaKnown_schema.options.map(option => option.shape.type.value),
+  );
+
+  /**
+   * Forward-compatibility (2026-06-09): unknown delta types (e.g. 'compaction_delta' from the compact beta)
+   * parse loosely instead of failing the stream. Known types are excluded, so malformed known deltas still fail validation.
+   */
+  const _ContentBlockDeltaUnknown_schema = z.looseObject({
+    type: z.string().refine(type => !_contentBlockDeltaKnownTypes.has(type)),
+  });
+
   export const event_ContentBlockDelta_schema = z.object({
     type: z.literal('content_block_delta'),
     index: z.number(),
-    delta: z.union([
-      z.object({
-        type: z.literal('text_delta'),
-        text: z.string(),
-      }),
-      z.object({
-        type: z.literal('input_json_delta'),
-        partial_json: z.string(),
-      }),
-      z.object({
-        type: z.literal('thinking_delta'),
-        thinking: z.string(),
-      }),
-      z.object({
-        type: z.literal('signature_delta'),
-        signature: z.string(),
-      }),
-      z.object({
-        // created by the hosted web_search tool, at least, in which case the citation is: Extract<typeof _TextBlockCitations_schema, { type: 'web_search_result_location' }>
-        type: z.literal('citations_delta'),
-        citation: AnthropicWire_Blocks._TextBlockCitations_schema,
-      }),
-    ]),
+    delta: z.union([_ContentBlockDeltaKnown_schema, _ContentBlockDeltaUnknown_schema]),
   });
+
+  export function isKnownContentBlockDelta(delta: z.infer<typeof event_ContentBlockDelta_schema>['delta']): delta is z.infer<typeof _ContentBlockDeltaKnown_schema> {
+    return _contentBlockDeltaKnownTypes.has(delta.type);
+  }
 
 }

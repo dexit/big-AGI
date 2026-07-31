@@ -109,6 +109,9 @@ export namespace AixWire_Parts {
           id: z.string().optional(),               // rs_... - item id
           encryptedContent: z.string().optional(), // blob returned when include:['reasoning.encrypted_content']
         }).optional(),
+        // Responses API message phase (on text parts): gpt-5.4+ set it on every assistant message;
+        // resent on replay (dropping it degrades performance per OpenAI docs)
+        phase: z.enum(['commentary', 'final_answer']).optional(),
       }).optional(),
       xai: z.object({
         // xAI Responses API reasoning item continuity handle. Same WIRE shape as OpenAI's, but the encrypted_content
@@ -117,6 +120,8 @@ export namespace AixWire_Parts {
           id: z.string().optional(),
           encryptedContent: z.string().optional(),
         }).optional(),
+        // message phase - captured via the shared Responses parser; not replayed to xAI yet
+        phase: z.enum(['commentary', 'final_answer']).optional(),
       }).optional(),
       // NOTE: we do NOT use this mechanism for per-vendor customization/ALT for parts
       // anthropic: z.object({
@@ -162,7 +167,7 @@ export namespace AixWire_Parts {
      * - image/gif: Anthropic, OpenAI
      * - image/heic, image/heif: Gemini
      */
-    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']), // keep in sync with AIX_WIRE_IMAGE_MIMETYPES
     base64: z.string(),
   });
 
@@ -420,14 +425,23 @@ export namespace AixWire_Tooling {
   /**
    * Policy for tools that the model can use:
    * - auto: can use a tool or not (default, same as not specifying a policy)
-   * - any: MUST use one tool at least
-   * - function_call: MUST use a specific Function Tool
+   * - any: MUST use one tool at least - DEPRECATED, see below
+   * - function_call: MUST use a specific Function Tool [DISABLED 2026-07-17 - see below]
    * - none: same as not giving the model any tool [REMOVED - just give no tools]
+   *
+   * @deprecated forced tool use is a thing of the past - 2026-06-09: Claude Fable/Mythos 5 reject it
+   * with a 400 ('tool_choice forces tool use is not compatible with this model.'); the Anthropic
+   * adapter coerces to 'auto' + a system steering hint. New code should use 'auto' (or no policy)
+   * and instruct the model to call the tool in the prompt instead.
+   *
+   * 2026-07-17: 'function_call' (forced NAMED tool) commented out AIX-wide: Moonshot also 400s it on
+   * all thinking-mode requests ("tool_choice 'specified' is incompatible with thinking enabled" - K3
+   * always), modern models don't need it, and with a single tool 'any' is equivalent. 'any' is kept.
    */
   export const ToolsPolicy_schema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('auto') }),
-    z.object({ type: z.literal('any') /*, parallel: z.boolean()*/ }),
-    z.object({ type: z.literal('function_call'), function_call: z.object({ name: z.string() }) }),
+    z.object({ type: z.literal('any') /*, parallel: z.boolean()*/ }), // @deprecated - prefer 'auto' + prompt steering
+    // z.object({ type: z.literal('function_call'), function_call: z.object({ name: z.string() }) }), // DISABLED 2026-07-17 - forced named tool, see deprecation note above
   ]);
 
 }
@@ -499,6 +513,7 @@ export namespace AixWire_API {
 
     // Anthropic
     vndAnt1MContext: z.boolean().optional(),
+    vndAntCodeSandbox: z.enum(['auto']).optional(), // standalone server-side code sandbox (also implied by Skills / programmatic tool calling)
     vndAntContainerId: z.string().optional(),
     vndAntInfSpeed: z.enum(['fast']).optional(),
     vndAntSkills: z.string().optional(),
@@ -520,6 +535,7 @@ export namespace AixWire_API {
     vndGeminiAspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
     vndGeminiCodeExecution: z.enum(['auto']).optional(),
     vndGeminiComputerUse: z.enum(['browser']).optional(),
+    vndGeminiEnvironmentId: z.string().optional(), // [vndGeminiAPI === 'interactions-agent'] Gemini Interactions API session/sandbox handle from a prior turn (forward-carry; best-effort - if upstream rejects the env, the request fails and the error surfaces)
     vndGeminiGoogleSearch: z.enum(['unfiltered', '1d', '1w', '1m', '6m', '1y']).optional(),
     vndGeminiImageSize: z.enum(['1K', '2K', '4K']).optional(),
     vndGeminiMediaResolution: z.enum(['mr_high', 'mr_medium', 'mr_low']).optional(),
@@ -531,7 +547,9 @@ export namespace AixWire_API {
 
     // OpenAI
     vndOaiCodeInterpreter: z.enum(['off', 'auto']).optional(),
+    vndOaiContainerId: z.string().optional(), // [Responses] reuse a prior code-interpreter session container (caller checks expiry before setting)
     vndOaiImageGeneration: z.enum(['mq', 'hq', 'hq_edit', 'hq_png']).optional(),
+    vndOaiReasoningMode: z.enum(['standard', 'pro']).optional(), // [2026-07-09, OpenAI] [Responses] GPT-5.6+ reasoning.mode - 'pro' performs additional model work, billed at standard rates
     vndOaiResponsesAPI: z.boolean().optional(),
     vndOaiRestoreMarkdown: z.boolean().optional(),
     vndOaiVerbosity: z.enum(['low', 'medium', 'high']).optional(),
@@ -782,6 +800,7 @@ export namespace AixWire_Particles {
     | { p: 'cer', id: string, error: DMessageToolResponsePart['error'], result: string, executor: 'gemini_auto_inline' | 'code_interpreter', environment: DMessageToolResponsePart['environment'] }
     | { p: 'ia', mimeType: string, a_b64: string, label?: string, generator?: string, durationMs?: number } // inline audio, complete
     | { p: 'ii', mimeType: string, i_b64: string, label?: string, generator?: string, prompt?: string, hintSkipResize?: boolean } // inline image, complete
+    | { p: 'iv', mimeType: string, v_b64: string, label?: string, generator?: string } // inline video, complete (EXPERIMENTAL: Gemini Omni; client plays it in-memory and does NOT persist it)
     /**
      * Model Operation - tracks instant model's operation(s) state, primarily for hosted tools.
      * - state is 'active' unless specified otherwise, 'error' is done too
@@ -791,12 +810,17 @@ export namespace AixWire_Particles {
     | { p: 'urlc', title: string, url: string, num?: number, from?: number, to?: number, text?: string, pubTs?: number } // url citation - pubTs: publication timestamp
     | { p: 'hres' } & ( // hosted resource - provider-hosted resource
       | { kind: 'vnd.ant.file', fileId: string, containerId?: string }
+      | { kind: 'vnd.gem.file', fileName: string, mimeType: string, isVideo?: boolean } // [Gemini Omni] Files-API artifact (e.g. delivery:uri video): re-fetchable by `files/{id}` name for ~48h via the key-proxied Gemini download route
+      | { kind: 'vnd.oai.container_file', fileId: string, containerId: string, filename?: string } // OpenAI code-interpreter container file (download via /v1/containers/.../files/.../content)
+      | { kind: 'inline-download', mimeType: string, b64: string, filename?: string } // inline bytes (e.g. Gemini code-exec file): client downloads & discards, never stored/re-fetchable
       )
     | { p: 'svs' } & ( // set vendor state - vendor-specific opaque protocol state
-      | { vendor: 'anthropic', state: { container: { id: string; expiresAt: string } } } // message-level
+      | { vendor: 'anthropic', state: { container: { id: string; expiresAt: string } } } // message-level - container reuse
+      | { vendor: 'openai-container', state: { container: { id: string; expiresAt: string } } } // message-level - OpenAI Responses code-interpreter container reuse; 20min TTL stamped by parser
+      | { vendor: 'gemini-envid', state: { environment: { id: string; expiresAt: string | null } } } // message-level - Gemini Interactions sandbox handle (today: Antigravity); 7d TTL stamped by parser
       | { vendor: 'gemini', state: { thoughtSignature: string } } // fragment-level
-      | { vendor: 'openai', state: { reasoningItem: { id?: string, encryptedContent?: string } } } // fragment-level (attach to ma reasoning fragment)
-      | { vendor: 'xai', state: { reasoningItem: { id?: string, encryptedContent?: string } } } // fragment-level - DISTINCT from openai (different encryption keys, different server-side ids)
+      | { vendor: 'openai', state: { reasoningItem?: { id?: string, encryptedContent?: string }, messagePhase?: 'commentary' | 'final_answer' } } // fragment-level: reasoningItem attaches to the last (ma) fragment; messagePhase breaks + tags the NEXT text fragment
+      | { vendor: 'xai', state: { reasoningItem?: { id?: string, encryptedContent?: string }, messagePhase?: 'commentary' | 'final_answer' } } // fragment-level - DISTINCT from openai (different encryption keys, different server-side ids)
       // | { vendor: string, state: Record<string, unknown> } // disable catch-all becasue it forces casts in type discriminations
       )
     ;

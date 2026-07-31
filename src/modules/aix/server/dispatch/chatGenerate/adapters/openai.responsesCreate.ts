@@ -48,6 +48,7 @@ export function aixToOpenAIResponses(
   const hotFixNoTruncateAuto = isOpenAIComputerUse;
 
   const isDialectAzure = openAIDialect === 'azure';
+  const isDialectSakana = openAIDialect === 'sakanaai';
 
   // ---
   // construct the request payload
@@ -58,7 +59,8 @@ export function aixToOpenAIResponses(
   // const strictJsonOutput = !!model.strictJsonOutput;
   const strictToolInvocations = !!model.strictToolInvocations;
 
-  const { requestInput, requestInstructions } = _toOpenAIResponsesRequestInput(chatGenerate.systemMessage, chatGenerate.chatSequence);
+  // emitMessagePhase: harmless on older OpenAI models (accepted and ignored), off for Azure (may lag this schema)
+  const { requestInput, requestInstructions } = _toOpenAIResponsesRequestInput(chatGenerate.systemMessage, chatGenerate.chatSequence, model.vndOaiContainerId, !isDialectAzure);
   const payload: TRequest = {
 
     // Model configuration
@@ -117,9 +119,8 @@ export function aixToOpenAIResponses(
 
 
   // Reasoning
+  // [2026-07-09, OpenAI] 'max' effort is valid since GPT-5.6 (was Responses-rejected before then) - per-model domain validation is left to the API
   const reasoningEffort = model.reasoningEffort; // ?? model.vndOaiReasoningEffort;
-  if (reasoningEffort === 'max') // domain validation
-    throw new Error(`OpenAI Responses API does not support '${reasoningEffort}' reasoning effort`);
 
   if (reasoningEffort) {
     payload.reasoning = {
@@ -131,7 +132,21 @@ export function aixToOpenAIResponses(
     ].some(_id => model.id === _id || model.id.startsWith(_id + '-'));
     if (reasoningEffort !== 'none' && !model.forceNoStream && !specialExclusions)
       payload.reasoning.summary = 'detailed';
+
+    // [2026-02-24, OpenAI] Retained reasoning: 'all_turns' makes gpt-5.4+ consume the reasoning items we
+    // replay ('auto' is provider discretion). The user lever is what we send (chat 'Reasoning traces'
+    // policy); the API only bills consumed items, so this is free when little/nothing is sent.
+    // Gate: gpt-5.4+ (older models 400 on 'all_turns'), not Azure (may lag), not effort 'none'.
+    const gptGen = /^gpt-(\d+)(?:\.(\d+))?/.exec(model.id);
+    const supportsAllTurns = !!gptGen && (+gptGen[1] > 5 || (+gptGen[1] === 5 && +(gptGen[2] || 0) >= 4));
+    if (supportsAllTurns && reasoningEffort !== 'none' && !isDialectAzure)
+      payload.reasoning.context = 'all_turns';
   }
+
+  // [2026-07-09, OpenAI] GPT-5.6+ Reasoning Mode: 'pro' performs additional model work for the hardest problems, billed at
+  // standard token rates (replaces standalone '-pro' models); orthogonal to effort, verified working with streaming
+  if (model.vndOaiReasoningMode)
+    payload.reasoning = { ...payload.reasoning, mode: model.vndOaiReasoningMode };
 
   // ALWAYS REQUEST Reasoning items: always include encrypted_content if there's any reasoning done; we had this inside the
   // former block, but models can reason even if reasoningEffort === undefined;
@@ -153,7 +168,7 @@ export function aixToOpenAIResponses(
 
   // Allow/deny auto-adding hosted tools when custom tools are present
   const hasCustomTools = chatGenerate.tools?.some(t => t.type === 'function_call');
-  const hasRestrictivePolicy = chatGenerate.toolsPolicy?.type === 'any' || chatGenerate.toolsPolicy?.type === 'function_call';
+  const hasRestrictivePolicy = chatGenerate.toolsPolicy?.type === 'any' /* || chatGenerate.toolsPolicy?.type === 'function_call' - DISABLED 2026-07-17, see ToolsPolicy_schema */;
   const skipHostedToolsDueToCustomTools = hasCustomTools && hasRestrictivePolicy;
 
   // Tool: Web Search: for search and deep research models
@@ -177,6 +192,8 @@ export function aixToOpenAIResponses(
         payload.tools = [];
       const webSearchTool: TRequestTool = model.id.includes('-deep-research') ? {
         type: 'web_search_preview', // HOTFIX for deep research models, which only seem to support the outdated 'web_search_preview' tool
+      } : isDialectSakana ? {
+        type: 'web_search', // [Sakana.ai] bare tool - context size is tolerated since ~2026-07 but undocumented (location/access unverified), so keep emitting bare
       } : {
         type: 'web_search',
         search_context_size: model.vndOaiWebSearchContext ?? undefined,
@@ -238,7 +255,12 @@ export function aixToOpenAIResponses(
 
       payload.tools.push({
         type: 'code_interpreter',
-        container: { type: 'auto' }, // auto-create/reuse container
+        // Always 'auto'. Reuse is driven by the round-tripped code_interpreter_call items below, which carry the prior
+        // container_id: auto-mode reuses that active container (files + Python state persist) or creates a fresh one if
+        // it expired. We deliberately do NOT pin the container explicitly here - per OpenAI docs, referencing an EXPIRED
+        // container explicitly hard-fails the request, whereas auto degrades gracefully.
+        container: { type: 'auto' }, // memory_limit/file_ids not surfaced (default 1g tier)
+        // container: model.vndOaiContainerId ? model.vndOaiContainerId : { type: 'auto' },
       });
 
       // Include code execution outputs in the response
@@ -267,7 +289,7 @@ export function aixToOpenAIResponses(
 }
 
 
-function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage | null, chatSequence: AixMessages_ChatMessage[]): { requestInput: TRequestInput[], requestInstructions: TRequest['instructions'] } {
+function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage | null, chatSequence: AixMessages_ChatMessage[], sessionContainerId: string | undefined, emitMessagePhase: boolean): { requestInput: TRequestInput[], requestInstructions: TRequest['instructions'] } {
 
   /**
    * Instructions to the model
@@ -302,12 +324,13 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
 
 
   // We decide to adopt these schemas for the conversion (API gives us a few choices)
-  const chatMessages: (UserMessage | ModelMessage | FunctionCallMessage | FunctionCallOutputMessage | ReasoningMessage)[] = [];
+  const chatMessages: (UserMessage | ModelMessage | FunctionCallMessage | FunctionCallOutputMessage | ReasoningMessage | CodeInterpreterCallMessage)[] = [];
   type UserMessage = Omit<OpenAIWire_Responses_Items.UserItemMessage, 'role'> & { role: 'user' };
   type ModelMessage = Extract<OpenAIWire_Responses_Items.InputMessage_Compat, { role: 'assistant' }>;
   type FunctionCallMessage = OpenAIWire_Responses_Items.OutputFunctionCallItem;
   type FunctionCallOutputMessage = OpenAIWire_Responses_Items.FunctionToolCallOutput;
   type ReasoningMessage = OpenAIWire_Responses_Items.OutputReasoningItem;
+  type CodeInterpreterCallMessage = Extract<OpenAIWire_Responses_Items.InputItem, { type: 'code_interpreter_call' }>;
 
   let allowUserAppend = true;
 
@@ -326,15 +349,17 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
     return newMessage;
   }
 
-  function modelMessage() {
-    // Ensure the last message is a model message, or create a new one
+  function modelMessage(phase?: 'commentary' | 'final_answer') {
+    // Reuse the last assistant message only when the phase matches; a mismatch (incl. tagged vs untagged)
+    // starts a new message item, mirroring the upstream item boundaries.
     let lastMessage = chatMessages.length ? chatMessages[chatMessages.length - 1] : undefined;
-    if (lastMessage && lastMessage.type === 'message' && lastMessage.role === 'assistant')
+    if (lastMessage && lastMessage.type === 'message' && lastMessage.role === 'assistant' && lastMessage.phase === phase)
       return lastMessage;
     const newMessage: ModelMessage = {
       type: 'message',
       role: 'assistant',
       content: [],
+      ...(phase ? { phase } : {}), // assistant-only field, resent verbatim on replay
     };
     chatMessages.push(newMessage);
     return newMessage;
@@ -374,6 +399,41 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
     chatMessages.push(newMessage);
     return newMessage;
   }
+
+  // The following 2 functions are to recreate native code execution (which includes the output) blocks
+  function newCodeInterpreterCallMessage(itemId: string, containerId: string, code: string) {
+    // Round-trip the hosted call as its canonical 'code_interpreter_call' item (not a fake 'execute_code' function_call):
+    // this also satisfies stateless reasoning's "a reasoning item must be followed by the item it produced" constraint.
+    // Caller gates on a live container, so container_id is always present (OpenAI rejects the item without it).
+    // PROVENANCE: containerId is the chat-wide most-recent (sessionContainerId), not each item's original sandbox -
+    // auto-mode still reuses the live container, but the replayed history isn't per-execution faithful.
+    const newMessage: CodeInterpreterCallMessage = {
+      type: 'code_interpreter_call',
+      id: itemId,
+      code: code,
+      container_id: containerId,
+      status: 'completed',
+    };
+    chatMessages.push(newMessage);
+    return newMessage;
+  }
+
+  function attachCodeInterpreterCallOutputs(itemId: string, result: string, isError: boolean) {
+    // Merge the paired tool_response's logs into the 'code_interpreter_call' item created above (matched by id).
+    // There is no separate output item type for code interpreter, so outputs live on the call item itself.
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const candidate = chatMessages[i];
+      if (candidate.type === 'code_interpreter_call' && candidate.id === itemId) {
+        if (result)
+          candidate.outputs = [{ type: 'logs', logs: result }];
+        candidate.status = isError ? 'failed' : 'completed';
+        return;
+      }
+    }
+    // Orphaned: a code_execution response should always follow its paired invocation - if not, fragments got separated upstream.
+    console.warn(`[DEV] AIX: OpenAI Responses - orphaned code_execution response (id=${itemId}), dropping outputs`);
+  }
+
 
   /**
    * Input Messages
@@ -446,7 +506,7 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
           switch (mPt) {
 
             case 'text':
-              modelMessage().content.push({
+              modelMessage(emitMessagePhase ? modelPart._vnd?.openai?.phase : undefined).content.push({
                 type: 'output_text',
                 text: modelPart.text,
               });
@@ -484,8 +544,15 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
                   newFunctionCallMessage(modelPart.id, invocation.name, invocation.args || '');
                   break;
                 case 'code_execution':
-                  console.warn('[DEV] notImplemented: OpenAI Responses: code execution tool calls');
-                  newFunctionCallMessage(modelPart.id, 'execute_code', invocation.code || '');
+                  // A 'code_interpreter_call' input item REQUIRES a container_id that still exists upstream (omitting it
+                  // 400s with "Missing required parameter: 'input[..].container_id'"; a stale id 404s). We only have a live
+                  // one when sessionContainerId is set. Without it - idle/expired, OR the prior execution was another
+                  // vendor's container (e.g. Gemini, stored as 'vnd.gem.interactions') - fall back to the container-
+                  // independent 'execute_code' function_call, which carries the code as context with no container dependency.
+                  if (sessionContainerId)
+                    newCodeInterpreterCallMessage(modelPart.id, sessionContainerId, invocation.code || '');
+                  else
+                    newFunctionCallMessage(modelPart.id, 'execute_code', invocation.code || '');
                   break;
                 default:
                   const _exhaustiveCheck: never = invocation;
@@ -514,8 +581,12 @@ function _toOpenAIResponsesRequestInput(systemMessage: AixMessages_SystemMessage
                   newFunctionCallOutputMessage(modelPart.id, functionCallOutput);
                   break;
                 case 'code_execution':
-                  const { result: codeExecutionOutput } = modelPart.response;
-                  newFunctionCallOutputMessage(modelPart.id, codeExecutionOutput);
+                  // Mirror the invocation's representation (same sessionContainerId gate): merge outputs into the
+                  // code_interpreter_call when live, else emit a plain function_call_output for the 'execute_code' fallback.
+                  if (sessionContainerId)
+                    attachCodeInterpreterCallOutputs(modelPart.id, modelPart.response.result, !!modelPart.error);
+                  else
+                    newFunctionCallOutputMessage(modelPart.id, modelPart.response.result);
                   break;
                 default:
                   const _exhaustiveCheck: never = toolResponseType;
@@ -586,8 +657,9 @@ function _toOpenAIResponsesToolChoice(itp: AixTools_ToolsPolicy): NonNullable<TR
       return 'auto';
     case 'any':
       return 'required';
-    case 'function_call':
-      return { type: 'function' as const, name: itp.function_call.name };
+    // DISABLED 2026-07-17 - forced named tool, see ToolsPolicy_schema
+    // case 'function_call':
+    //   return { type: 'function' as const, name: itp.function_call.name };
     default:
       const _exhaustiveCheck: never = itpType;
       throw new Error(`Unsupported tools policy type: ${itpType}`);

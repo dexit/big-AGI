@@ -8,21 +8,24 @@ import type { IParticleTransmitter } from './IParticleTransmitter';
 import { AIX_OAI_DEFAULT_IMAGE_GEN_MODEL } from '../adapters/openai.responsesCreate';
 import { IssueSymbols } from '../ChatGenerateTransmitter';
 import { aixResilientUnknownValue } from '../../../api/aix.resilience';
+import { openAIUpstreamErrorLogLevel } from './openai.error-severity';
 
 import { OpenAIWire_API_Responses, OpenAIWire_Responses_Tools } from '../../wiretypes/openai.wiretypes';
 
 
 // configuration
 const OPENAI_RESPONSES_DEBUG_EVENT_SEQUENCE = false; // true: shows the sequence of events
+const OPENAI_RESPONSES_SALVAGE_FAILED = true; // #1149: 'failed' responses whose message completed (and streamed) are successes wrapped by a post-generation rate-limit check - false: restore fatal-on-error
 const OPENAI_RESPONSES_SAME_PART_SPACER = '\n\n';
 const INLINE_IMAGE_SKIP_RESIZE_MAX_B64_BYTES = 250_000; // skip resize for small images (e.g. code interpreter charts)
+const OPENAI_DEFAULT_CONTAINER_TTL_MS = 20 * 60 * 1000; // OpenAI code-interpreter containers expire after 20 min of inactivity (per docs); we stamp this so the client's reuse walk skips stale handles
 
 
 /**
- * Wishlist marker: hosted tool calls (web_search_call, image_generation_call, code_interpreter_call, ...)
- * are rendered via ephemeral OperationState/inline-asset paths and are NOT round-tripped as structured
- * fragments. This breaks stateless multi-turn with reasoning models. See PRD.FUTURE-atol.md "Wishlist:
- * Hosted tool invocations as first-class fragments".
+ * Wishlist marker: hosted tool calls (web_search_call, image_generation_call, ...) are rendered via ephemeral
+ * OperationState/inline-asset paths and are NOT round-tripped as structured fragments (breaks stateless multi-turn
+ * with reasoning models). NOTE: code_interpreter_call IS now round-tripped (see openai.responsesCreate.ts).
+ * See PRD.FUTURE-atol.md "Wishlist: Hosted tool invocations as first-class fragments".
  */
 // const _hostedToolWishlistSeen = new Set<string>();
 function _hostedToolWishlistHint(family: 'web_search' | 'image_generation' | 'code_interpreter' | 'custom_tool'): void {
@@ -66,6 +69,23 @@ function _findImageGenToolCfg(tools: TResponse['tools']): TImageGenToolCfg | und
   return tools?.find((t): t is TImageGenToolCfg => t.type === 'image_generation');
 }
 
+/**
+ * #1149 'failed'-response salvage - the single decision point, shared by streaming and NS.
+ *
+ * OpenAI can wrap a genuinely-COMPLETE response as 'failed': the TPM rate-limit check runs against actual
+ * usage mid-flight (not just at admission), so reasoning+search runs can trip it AFTER the final message
+ * fully generated and streamed. The wire shows 'error' (rate_limit_exceeded) -> 'response.failed', whose
+ * .output still carries the message with status 'completed' - that per-item status is the authoritative
+ * "generation finished" signal. Streaming callers additionally require `R.hasEmittedText` (the text actually
+ * reached the client), so a completed-but-never-streamed message can't render as an empty success; the NS
+ * parser needs no such check, as it emits content from this same .output.
+ * Empirical 2026-07-03 (5/5 GPT-5.5 Pro + web_search repros); same upstream behavior independently hit by
+ * vercel/ai#6534 and openai/codex#10055.
+ */
+function _isSalvageableFailedOutput(output: TResponse['output']): boolean {
+  return OPENAI_RESPONSES_SALVAGE_FAILED && output.some(item => item.type === 'message' && item.status === 'completed');
+}
+
 
 /**
  * We need this just to ensure events are not out of order, as out streaming is progressive
@@ -99,6 +119,7 @@ class ResponseParserStateMachine {
 
   // streaming state tracking
   #hasFunctionCalls: boolean = false; // tracks if we've seen function_call output items
+  public hasEmittedText: boolean = false; // any assistant message text streamed - gates the 'error'/'response.failed' salvage (#1149)
   #responseSealed: boolean = false; // true once response.completed/failed/incomplete has been processed - trailing 'error' events are advisory only
 
   // hosted tool configuration echo (captured at response.created)
@@ -171,6 +192,13 @@ class ResponseParserStateMachine {
       console.warn(`[DEV] AIX: ${label} - output item enter index/type mismatch: expected ${expectedIndex}/${outputType}, got ${this.#inOutputIndex}/${this.#inOutputType}`);
     this.#inOutputIndex = outputIndex;
     this.#inOutputType = outputType;
+    // [2026-06-12] content_index/summary_index are scoped per output item by the protocol: reset on item entry.
+    // Without this, a response with a second 'reasoning' (or 'message') item inherits the prior item's index
+    // and summaryPartEnter/contentPartEnter warn spuriously (seen with reasoning -> tools -> reasoning flows).
+    this.#contentIndex = undefined;
+    this.#contentAddSpacer = false;
+    this.#summaryIndex = undefined;
+    this.#summaryAddSpacer = false;
   }
 
   outputItemExit(label: TEventType, outputIndex: number, outputType: TOutputItem['type']) {
@@ -378,30 +406,45 @@ export function createOpenAIResponsesEventParser(vendor: 'openai' | 'xai'): Chat
         // -> Output
         // TODO: verify that we correctly captured all the outputs?
 
-        // -> Usage (incl. dtAll)
-        if (event.response.usage) {
-          const metrics = _fromResponseUsage(event.response.usage, R.parserCreationTimestamp, R.timeToFirstEvent);
-          if (metrics)
-            pt.updateMetrics(metrics);
-        }
+        // -> Metrics: timing always, tokens only when the usage block carries them (#1149)
+        pt.updateMetrics(_fromResponseMetrics(event.response.usage, R.parserCreationTimestamp, R.timeToFirstEvent));
 
         // -> End of the response
         R.markResponseSealed();
         pt.setDialectEnded('done-dialect'); // OpenAI Responses: 'response.completed'
         break;
 
-      case 'response.failed':
+      case 'response.failed': {
         R.setResponse(eventType, event.response);
+        if (R.responseSealed) break; // already terminated (e.g. by a no-text 'error' event) - this is a trailing echo
         R.markResponseSealed();
-        pt.setTokenStopReason('cg-issue'); // generic issue?
-        console.warn(`[DEV] AIX: FIXME: OpenAI-Response failed ${eventType}:`, event.response);
-        // TODO: extract and forward error details
+
+        // -> Metrics: timing always, even on failure (#1149; wrapped-failed responses carry usage: null)
+        pt.updateMetrics(_fromResponseMetrics(event.response.usage, R.parserCreationTimestamp, R.timeToFirstEvent));
+
+        // #1149 salvage: completed message + streamed text -> success (see _isSalvageableFailedOutput)
+        const failedError = event.response.error;
+        if (R.hasEmittedText && _isSalvageableFailedOutput(event.response.output)) {
+          console.warn(`[DEV] AIX: OpenAI Responses: response.failed but message already completed - treating as a soft success: ${failedError?.message || 'no error details'}`);
+          pt.setTokenStopReason(R.hasFunctionCalls ? 'ok-tool_invocations' : 'ok');
+          pt.setDialectEnded('done-dialect');
+          break;
+        }
+
+        // Genuine failure: surface the error
+        pt.setTokenStopReason('cg-issue');
+        pt.setDialectTerminatingIssue(!failedError ? 'Response failed with no error details.'
+          : `${safeErrorString(failedError.code) || 'Error'}: ${safeErrorString(failedError.message) || 'unknown.'}`, IssueSymbols.Generic, openAIUpstreamErrorLogLevel(failedError));
         break;
+      }
 
       case 'response.incomplete':
         // TODO: We haven't seen one of those events yet; we need to see what happens and parse it!
         R.setResponse(eventType, event.response);
         R.markResponseSealed();
+
+        // -> Metrics: timing always, tokens when the usage block carries them (#1149)
+        pt.updateMetrics(_fromResponseMetrics(event.response.usage, R.parserCreationTimestamp, R.timeToFirstEvent));
 
         // -> Status: handle incomplete response
         if (event.response.incomplete_details?.reason === 'max_output_tokens')
@@ -423,6 +466,14 @@ export function createOpenAIResponsesEventParser(vendor: 'openai' | 'xai'): Chat
         // expected the beginning of a new output item
         // BLANK item expected, of type 'message', 'reasoning' or 'function_call'
         R.outputItemEnter(eventType, event.output_index, event.item.type);
+
+        // [gpt-5.4+] message phase ('commentary' vs 'final_answer') is known at item-open, before the first
+        // text delta: forward it now so the client breaks + tags the upcoming text fragment
+        if (event.item.type === 'message') {
+          const messagePhase = event.item.phase;
+          if (messagePhase === 'commentary' || messagePhase === 'final_answer')
+            pt.sendSetVendorState({ p: 'svs', vendor: vendor, state: { messagePhase } });
+        }
         break;
 
       case 'response.output_item.done':
@@ -554,7 +605,7 @@ export function createOpenAIResponsesEventParser(vendor: 'openai' | 'xai'): Chat
 
       case 'response.reasoning_summary_part.added':
         R.summaryPartEnter(eventType, event.output_index, event.summary_index);
-        R.expectEvents(['response.reasoning_summary_text.delta', 'response.reasoning_summary_text.done', 'response.reasoning_summary_part.done']);
+        R.expectEvents(['response.reasoning_summary_text.delta', 'response.reasoning_summary_text.done', 'response.reasoning_summary_part.done', 'response.reasoning_summary_part.added' /* parts can re-open without a .done in between - see summaryPartEnter */]);
         // nothing else to do, the part is likely empty, and we will incrementally parse it
         break;
 
@@ -573,6 +624,7 @@ export function createOpenAIResponsesEventParser(vendor: 'openai' | 'xai'): Chat
         R.contentPartVisit(eventType, event.output_index, event.content_index);
         // .delta: -> append the text content
         pt.appendText(R.contentPartInjectSpacer() ? OPENAI_RESPONSES_SAME_PART_SPACER + event.delta : event.delta);
+        if (event.delta) R.hasEmittedText = true;
         break;
 
       case 'response.output_text.done':
@@ -733,26 +785,38 @@ export function createOpenAIResponsesEventParser(vendor: 'openai' | 'xai'): Chat
 
       // 1.5 - Error
 
-      case 'error':
+      case 'error': {
         // there are complexities related to parsing this type: the docs suggest a flat structure, but we see nested objects
         // see the explanation on OpenAIWire_API_Responses.ErrorEvent_schema
 
         const errorCode = safeErrorString(event.error?.type || event.error?.code || event.code) ?? undefined;
         const errorMessage = safeErrorString(event.error?.message || event?.message) ?? undefined;
         const errorParam = safeErrorString(event.error?.param || event?.param) ?? undefined;
+        const errorText = `${errorCode || 'Error'}: ${errorMessage || 'unknown.'}${errorParam ? ` (param: ${errorParam})` : ''}`;
 
         // Trailing-error guard: if the response already reached a terminal state (completed/failed/incomplete),
         // an 'error' event arriving after is an upstream advisory (e.g. rate-limit headroom) and must NOT
         // override the prior termination - otherwise it flips the message to red and the Beam ray to 'error'.
         if (R.responseSealed) {
-          console.warn(`[DEV] AIX: OpenAI Responses: trailing 'error' after sealed response - ignored: ${errorCode || 'Error'}: ${errorMessage || 'unknown.'}${errorParam ? ` (param: ${errorParam})` : ''}`);
+          console.warn(`[DEV] AIX: OpenAI Responses: trailing 'error' after sealed response - ignored: ${errorText}`);
           break;
         }
 
-        // Transmit the error as text - note: throw if you want to transmit as 'error'
-        // FIXME: potential point for throwing OperationRetrySignal (using 'srv-warn' for now)
-        pt.setDialectTerminatingIssue(`${errorCode || 'Error'}: ${errorMessage || 'unknown.'}${errorParam ? ` (param: ${errorParam})` : ''}`, IssueSymbols.Generic, 'srv-warn');
+        // #1149 salvage candidate: text already streamed and this event carries no .output to check - defer
+        // the verdict to the imminent 'response.failed' (see _isSalvageableFailedOutput), which repeats this error
+        if (OPENAI_RESPONSES_SALVAGE_FAILED && R.hasEmittedText) {
+          console.warn(`[DEV] AIX: OpenAI Responses: mid-stream 'error' after text streamed - deferring the verdict to the terminal event: ${errorText}`);
+          break;
+        }
+
+        // Nothing to salvage - fail now (and seal, so the trailing 'response.failed' echo doesn't re-report)
+        // FIXME: potential point for throwing OperationRetrySignal
+        R.markResponseSealed();
+        pt.updateMetrics(_fromResponseMetrics(undefined, R.parserCreationTimestamp, R.timeToFirstEvent)); // timing even on failure (#1149)
+        pt.setTokenStopReason('cg-issue');
+        pt.setDialectTerminatingIssue(errorText, IssueSymbols.Generic, openAIUpstreamErrorLogLevel({ code: event.error?.code ?? event.code, type: event.error?.type }));
         break;
+      }
 
       case 'keepalive':
         // [OpenAI, 2025-01-13] Keepalive events are sent periodically to keep the connection alive
@@ -805,8 +869,10 @@ export function createOpenAIResponseParserNS(vendor: 'openai' | 'xai'): ChatGene
     const responseData = JSON.parse(eventData);
 
     // .error: transmits upstream errors pre-parsing (object wouldn't be valid)
-    if (_forwardResponseError(responseData, pt))
+    if (_forwardResponseError(responseData, pt)) {
+      pt.updateMetrics({ dtAll: Date.now() - parserCreationTimestamp }); // timing even on failure (#1149)
       return;
+    }
 
     // [OpenAI] possibly log the warnings to get more insights on the API
     if (responseData.warning)
@@ -825,12 +891,8 @@ export function createOpenAIResponseParserNS(vendor: 'openai' | 'xai'): ChatGene
     // -> Upstream Handle (for remote control: resume, cancel, delete)
     // NOTE: we don't do it for full responses, because they're supposed to be 'complete' - i.e. no 'background' execution
 
-    // -> Usage
-    if (response.usage) {
-      const metrics = _fromResponseUsage(response.usage, parserCreationTimestamp, undefined);
-      if (metrics)
-        pt.updateMetrics(metrics);
-    }
+    // -> Metrics: timing always, tokens only when the usage block carries them (#1149)
+    pt.updateMetrics(_fromResponseMetrics(response.usage, parserCreationTimestamp, undefined));
 
     // -> Status
 
@@ -871,8 +933,14 @@ export function createOpenAIResponseParserNS(vendor: 'openai' | 'xai'): ChatGene
         break;
 
       case 'failed':
-        tokenStopReason = 'cg-issue';
-        console.warn('[DEV] AIX: OpenAI-Response-NS response failed:', { response });
+        // #1149 salvage: only fix the stop reason - the per-item loop below appends content regardless of
+        // status (see _isSalvageableFailedOutput)
+        if (_isSalvageableFailedOutput(response.output))
+          console.warn('[DEV] AIX: OpenAI-Response-NS failed but message already completed - treating as a soft success:', { error: response.error });
+        else {
+          tokenStopReason = 'cg-issue';
+          console.warn('[DEV] AIX: OpenAI-Response-NS response failed:', { response });
+        }
         // TODO: extract and forward specific error details from response.error if present
         break;
 
@@ -962,6 +1030,7 @@ export function createOpenAIResponseParserNS(vendor: 'openai' | 'xai'): ChatGene
           const {
             // id: messageId,
             content: messageContent,
+            phase: messagePhase,
             // role: messageRole,
           } = oItem;
 
@@ -970,6 +1039,10 @@ export function createOpenAIResponseParserNS(vendor: 'openai' | 'xai'): ChatGene
             console.warn('[DEV] AIX: OpenAI-Response-NS unexpected message content type:', { messageContent });
             break;
           }
+
+          // [gpt-5.4+] forward the message phase before the item's text (mirrors the streaming path)
+          if (messagePhase === 'commentary' || messagePhase === 'final_answer')
+            pt.sendSetVendorState({ p: 'svs', vendor: vendor, state: { messagePhase } });
 
           // Message
           for (const content of messageContent) {
@@ -1064,26 +1137,29 @@ export function createOpenAIResponseParserNS(vendor: 'openai' | 'xai'): ChatGene
 }
 
 
-function _fromResponseUsage(usage: OpenAIWire_API_Responses.Response['usage'], parserCreationTimestamp: number, timeToFirstEvent: number | undefined) {
+function _fromResponseMetrics(usage: OpenAIWire_API_Responses.Response['usage'], parserCreationTimestamp: number, timeToFirstEvent: number | undefined): AixWire_Particles.CGSelectMetrics {
 
-  // -> Stats only in some packages
-  if (!usage)
-    return undefined;
-
-  // Require at least the completion tokens, or issue a DEV warning otherwise
-  if (usage.output_tokens === undefined) {
-    // Warn, so we may adjust this usage parsing for Non-OpenAI APIs
-    console.log('[DEV] AIX: OpenAI Responses missing completion tokens in usage', { usage });
-    return undefined;
-  }
-
-  // Create the metrics update object
+  // Time Metrics - measured locally (parser-creation -> now), independent of the upstream `usage` block.
+  // Emitted UNCONDITIONALLY: long-running Responses models (o-series `-pro`, deep-research, background
+  // polling) omit `usage` in their terminal event, so gating timing behind usage-presence would silently
+  // discard the real run duration (`dtAll`) and the "Time:" row could never render (#1149, cf. #1143).
   const metricsUpdate: AixWire_Particles.CGSelectMetrics = {
-    TIn: usage.input_tokens ?? undefined,
-    TOut: usage.output_tokens,
     // dtInner: openAI is not reporting the time as seen by the servers
     dtAll: Date.now() - parserCreationTimestamp,
   };
+  if (timeToFirstEvent !== undefined)
+    metricsUpdate.dtStart = timeToFirstEvent;
+
+  // Token Metrics - only when the upstream usage block carries completion tokens
+  if (usage?.output_tokens === undefined) {
+    // Warn (dev) when usage is present but lacks completion tokens, so we may adjust for Non-OpenAI APIs
+    if (usage)
+      console.log('[DEV] AIX: OpenAI Responses missing completion tokens in usage', { usage });
+    return metricsUpdate;
+  }
+
+  metricsUpdate.TIn = usage.input_tokens ?? undefined;
+  metricsUpdate.TOut = usage.output_tokens;
 
   // Input Metrics
 
@@ -1110,11 +1186,6 @@ function _fromResponseUsage(usage: OpenAIWire_API_Responses.Response['usage'], p
 
   // TODO: Output breakdown: Audio
 
-  // Time Metrics
-
-  if (timeToFirstEvent !== undefined)
-    metricsUpdate.dtStart = timeToFirstEvent;
-
   return metricsUpdate;
 }
 
@@ -1133,9 +1204,15 @@ function _forwardResponseError(parsedData: any, pt: IParticleTransmitter) {
     return false;
   }
 
+  // #1149 salvage: a full 'failed' Response with a completed message is not a bare error envelope - let
+  // the normal parse path append its content and set the stop reason (see _isSalvageableFailedOutput);
+  // without this, the early exit here would discard the entire completed answer
+  if (Array.isArray(parsedData.output) && _isSalvageableFailedOutput(parsedData.output))
+    return false;
+
   // Transmit the error as text - note: throw if you want to transmit as 'error'
-  // FIXME: potential point for throwing OperationRetrySignal (using 'srv-warn' for now)
-  pt.setDialectTerminatingIssue(safeErrorString(error) || 'unknown.', IssueSymbols.Generic, 'srv-warn');
+  // FIXME: potential point for throwing OperationRetrySignal
+  pt.setDialectTerminatingIssue(safeErrorString(error) || 'unknown.', IssueSymbols.Generic, openAIUpstreamErrorLogLevel(error));
   return true;
 }
 
@@ -1159,13 +1236,24 @@ function _forwardTextAnnotation(pt: IParticleTransmitter, annotation: Exclude<Ex
       );
       break;
 
+    case 'container_file_citation':
+      // Code-interpreter-generated file (e.g. a PDF the model created): emit a hosted resource so the UI
+      // renders a real download chip backed by /v1/containers/.../files/.../content. Mirrors Anthropic's vnd.ant.file.
+      pt.appendHostedResource({
+        p: 'hres',
+        kind: 'vnd.oai.container_file',
+        fileId: annotation.file_id,
+        containerId: annotation.container_id,
+        ...(annotation.filename ? { filename: annotation.filename } : {}),
+      });
+      break;
+
     default:
       const _exhaustiveCheck: never = annotation;
       // fallthrough
-    case 'container_file_citation':
     case 'file_citation':
     case 'file_path':
-      // Unknown annotation type - log for future implementation
+      // file_search / vector-store file references - not surfaced yet
       console.log(`[DEV] AIX: OpenAI-Responses - Unhandled annotation:`, { annotation });
       break;
   }
@@ -1267,7 +1355,16 @@ function _forwardDoneWebSearchCallItem(pt: IParticleTransmitter, webSearchCall: 
  */
 function _forwardDoneCodeInterpreterCallItem(pt: IParticleTransmitter, codeInterpreterCall: Extract<OpenAIWire_API_Responses.Response['output'][number], { type: 'code_interpreter_call' }>): void {
   _hostedToolWishlistHint('code_interpreter');
-  const { id, code, outputs, status /*,container_id*/ } = codeInterpreterCall;
+  const { id, code, outputs, status, container_id } = codeInterpreterCall;
+
+  // -> Session container (message-scoped): promote for cross-turn reuse (round-trip + explicit pinning) and file downloads.
+  // OpenAI omits a retention field, so we stamp now+20min (its inactivity TTL); the client's reuse walk gates on it.
+  if (container_id)
+    pt.sendSetVendorState({
+      p: 'svs',
+      vendor: 'openai-container',
+      state: { container: { id: container_id, expiresAt: new Date(Date.now() + OPENAI_DEFAULT_CONTAINER_TTL_MS).toISOString() } },
+    });
 
   // <- Emit code (like Gemini's executableCode)
   if (code)

@@ -805,28 +805,32 @@ function createSingleConfig(
   host?: string,
 ): Record<string, AixAPI_Access> {
   const config: Record<string, AixAPI_Access> = {};
+  const aixDialect = dialect as AixAPI_Access['dialect'];
 
-  switch (dialect) {
-    case 'openai':
+  switch (aixDialect) {
     case 'alibaba':
     case 'azure':
+    case 'cerebras':
+    case 'cohere':
     case 'deepseek':
     case 'groq':
     case 'lmstudio':
     case 'localai':
     case 'mistral':
     case 'moonshot':
-    case 'openpipe':
+    case 'nvidianim':
+    case 'openai':
     case 'openrouter':
     case 'perplexity':
+    case 'sakanaai':
     case 'togetherai':
     case 'xai':
+    case 'zai':
       config[dialect] = {
         dialect: dialect as any,
         oaiKey: key,
         oaiOrg: '',
         oaiHost: host || '',
-        heliKey: '',
       } as any;
       break;
 
@@ -835,7 +839,6 @@ function createSingleConfig(
         dialect: 'anthropic',
         anthropicKey: key,
         anthropicHost: host || null,
-        heliconeKey: null,
       } as any;
       break;
 
@@ -855,8 +858,22 @@ function createSingleConfig(
       } as any;
       break;
 
+    case 'bedrock':
+      // Single-config mode: --key is the Bedrock bearer token; --host is reused as the AWS region (empty -> server default).
+      config[dialect] = {
+        dialect: 'bedrock',
+        bedrockBearerToken: key,
+        bedrockAccessKeyId: '',
+        bedrockSecretAccessKey: '',
+        bedrockSessionToken: null,
+        bedrockRegion: host || '',
+        clientSideFetch: false,
+      } as any;
+      break;
+
     default:
-      throw new Error(`Unsupported dialect: ${dialect}`);
+      const _exhaustiveCheck: never = aixDialect;
+      throw new Error(`Unsupported dialect: ${aixDialect}`);
   }
 
   return config;

@@ -13,9 +13,11 @@ Reference `src/modules/llms/server/llm.server.types.ts` and `src/modules/llms/se
 
 **Fallbacks if blocked:**
 - Search "mistral [model-name] latest pricing",  "mistral api latest pricing", "mistral latest models", or search GitHub for latest model prices and context windows
-- Cross-reference: pricepertoken.com, helicone.ai, artificialanalysis.ai
+- Cross-reference: pricepertoken.com, artificialanalysis.ai
 - Check Mistral API list models response
 - As last resort: Use Chrome DevTools MCP to render pricing table
+
+**Live endpoint (extra signal):** If `.env.api-keys` has `MISTRAL_API_KEY`, scan the served model list as ground-truth for what's new/available and cross-check the docs above: `curl https://api.mistral.ai/v1/models -H "Authorization: Bearer $MISTRAL_API_KEY"`. Never commit or echo the key.
 
 **Important:**
 - Review the full model list for additions, removals, and price changes

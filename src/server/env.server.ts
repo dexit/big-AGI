@@ -60,6 +60,9 @@ export const env = createEnv({
     BEDROCK_SESSION_TOKEN: z.string().optional(), // required with the other 2 on corporate accounts sometimes
     BEDROCK_REGION: z.string().optional(),
 
+    // LLM: Cerebras
+    CEREBRAS_API_KEY: z.string().optional(),
+
     // LLM: Deepseek AI
     DEEPSEEK_API_KEY: z.string().optional(),
 
@@ -79,11 +82,12 @@ export const env = createEnv({
     // LLM: Moonshot AI
     MOONSHOT_API_KEY: z.string().optional(),
 
+    // LLM: NVIDIA NIM (build.nvidia.com hosted, or self-hosted NIM/vLLM)
+    NVIDIANIM_API_KEY: z.string().optional(),
+    NVIDIANIM_API_HOST: z.url().optional(),
+
     // LLM: Ollama
     OLLAMA_API_HOST: z.url().optional(),
-
-    // LLM: OpenPipe
-    OPENPIPE_API_KEY: z.string().optional(),
 
     // LLM: OpenRouter
     OPENROUTER_API_KEY: z.string().optional(),
@@ -91,15 +95,15 @@ export const env = createEnv({
     // LLM: Perplexity
     PERPLEXITY_API_KEY: z.string().optional(),
 
+    // LLM: Sakana AI
+    SAKANA_API_KEY: z.string().optional(),
+    SAKANA_API_HOST: z.url().optional(),
+
     // LLM: Together AI
     TOGETHERAI_API_KEY: z.string().optional(),
 
     // LLM: xAI
     XAI_API_KEY: z.string().optional(),
-
-
-    // Helicone - works on both OpenAI and Anthropic vendors
-    HELICONE_API_KEY: z.string().optional(),
 
 
     // Browsing Service

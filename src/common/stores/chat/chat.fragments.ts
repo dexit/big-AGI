@@ -106,11 +106,16 @@ export type DMessageFragmentVendorState = Record<string, unknown> & {
     // Responses API reasoning item continuity handle.
     // IMPORTANT: OpenAI-private encryption + server-side item id; never round-trip to xAI.
     reasoningItem?: { id?: string; encryptedContent?: string; };
+    // Responses API message phase (on text fragments): 'commentary' (preamble/progress) vs 'final_answer'.
+    // gpt-5.4+ set it on every assistant message; replayed on follow-up requests.
+    phase?: 'commentary' | 'final_answer';
   };
   xai?: {
     // xAI Responses API reasoning item continuity handle.
     // IMPORTANT: xAI-private encryption + server-side item id; never round-trip to OpenAI.
     reasoningItem?: { id?: string; encryptedContent?: string; };
+    // message phase - captured via the shared Responses parser; not replayed to xAI yet
+    phase?: 'commentary' | 'final_answer';
   };
   // Future: anthropic?: { ... }
 }
@@ -247,7 +252,9 @@ type DMessageToolCodeExecutor = 'gemini_auto_inline' | 'code_interpreter';
 export type DMessageHostedResourcePart = {
   pt: 'hosted_resource';
   resource:
-    | { via: 'anthropic', fileId: string, containerId?: string };
+    | { via: 'anthropic', fileId: string, containerId?: string }
+    | { via: 'gemini-file', fileName: string, mimeType: string, isVideo?: boolean /* NOTE: more metadata incl expiration time can be fetched by fileName */ } // [Gemini] Files-API artifact (e.g. Omni video via delivery:uri) - re-fetchable for ~48h via the key-proxied Gemini download route
+    | { via: 'openai-container', fileId: string, containerId: string, filename?: string }; // OpenAI code-interpreter container file
 };
 
 
@@ -592,7 +599,7 @@ export function createDMessageZyncAssetReferencePart(zUuid: ZYNC_Entity.UUID, re
 }
 
 function _create_Doc_Part(vdt: DMessageDocMimeType, data: DMessageDataInline, ref: string, l1Title: string, version: number, meta?: DMessageDocMeta): DMessageDocPart {
-  return { pt: 'doc', vdt, data, ref, l1Title, version, meta };
+  return { pt: 'doc', vdt, data, ref, l1Title, version, ...(meta && { meta }) };
 }
 
 function _create_ImageRef_Part(dataRef: DMessageDataRef, altText?: string, width?: number, height?: number): DMessageImageRefPart {

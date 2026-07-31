@@ -89,6 +89,15 @@ export const wireOpenrouterModelsListOutputSchema = z.object({
     z.string(), // Allow other parameters not in the enum
   ])).optional(),
 
+  // [OpenRouter, 2026-07-31] Per-model reasoning surface. Often present with `supported_efforts` null/absent (most GLM,
+  // Kimi K2.x, Grok 4.20, DeepSeek V3.x), so an empty list means "no information", never "no efforts supported".
+  reasoning: z.object({
+    mandatory: z.boolean().nullish(), // true = reasoning cannot be disabled (rejects the 'off' request)
+    default_enabled: z.boolean().nullish(),
+    supported_efforts: z.array(z.string()).nullish(),
+    default_effort: z.string().nullish(),
+  }).nullish(),
+
   // not useful to us
   // default_parameters: z.object({
   //   temperature: z.number().nullish(),
@@ -96,4 +105,29 @@ export const wireOpenrouterModelsListOutputSchema = z.object({
   //   frequency_penalty: z.number().nullish(),
   // }).nullish(),
 
+});
+
+// [OpenRouter] Image Generation API - https://openrouter.ai/docs/features/multimodal/image-generation
+// - POST /api/v1/images: { model, prompt, n? } -> { created, data: [{ b64_json, media_type? }], usage? }
+
+export type WireOpenRouterCreateImagesRequest = z.infer<typeof wireOpenRouterCreateImagesRequestSchema>;
+export const wireOpenRouterCreateImagesRequestSchema = z.object({
+  model: z.string(),
+  prompt: z.string(),
+  n: z.number().min(1).max(10).optional(),
+});
+
+export type WireOpenRouterCreateImagesResponse = z.infer<typeof wireOpenRouterCreateImagesResponseSchema>;
+export const wireOpenRouterCreateImagesResponseSchema = z.object({
+  created: z.number().optional(),
+  data: z.array(z.object({
+    b64_json: z.string(),
+    media_type: z.string().optional(), // e.g. 'image/png' - may be absent even for JPEGs
+    revised_prompt: z.string().optional(),
+  })),
+  usage: z.object({
+    prompt_tokens: z.number().optional(),
+    completion_tokens: z.number().optional(),
+    total_tokens: z.number().optional(),
+  }).loose().optional(),
 });

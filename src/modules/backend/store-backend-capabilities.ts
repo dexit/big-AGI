@@ -19,9 +19,9 @@ export interface BackendCapabilities {
   hasLlmLocalAIKey: boolean;
   hasLlmMistral: boolean;
   hasLlmMoonshot: boolean;
+  hasLlmNvidiaNIM: boolean;
   hasLlmOllama: boolean;
   hasLlmOpenAI: boolean;
-  hasLlmOpenPipe: boolean;
   hasLlmOpenRouter: boolean;
   hasLlmPerplexity: boolean;
   hasLlmTogetherAI: boolean;
@@ -61,9 +61,9 @@ const useBackendCapabilitiesStore = create<BackendStore>()(
     hasLlmLocalAIKey: false,
     hasLlmMistral: false,
     hasLlmMoonshot: false,
+    hasLlmNvidiaNIM: false,
     hasLlmOllama: false,
     hasLlmOpenAI: false,
-    hasLlmOpenPipe: false,
     hasLlmOpenRouter: false,
     hasLlmPerplexity: false,
     hasLlmTogetherAI: false,

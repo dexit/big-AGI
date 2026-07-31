@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
+import type { DocPageSlug } from '~/common/gen/docs.slugs';
 
 import { findModelVendor, ModelVendorId } from '../vendors/vendors.registry';
 
@@ -10,6 +11,8 @@ import { AlibabaServiceSetup } from '../vendors/alibaba/AlibabaServiceSetup';
 import { AnthropicServiceSetup } from '../vendors/anthropic/AnthropicServiceSetup';
 import { AzureServiceSetup } from '../vendors/azure/AzureServiceSetup';
 import { BedrockServiceSetup } from '../vendors/bedrock/BedrockServiceSetup';
+import { CerebrasServiceSetup } from '../vendors/cerebras/CerebrasServiceSetup';
+import { CohereServiceSetup } from '../vendors/cohere/CohereServiceSetup';
 import { DeepseekAIServiceSetup } from '../vendors/deepseek/DeepseekAIServiceSetup';
 import { GeminiServiceSetup } from '../vendors/gemini/GeminiServiceSetup';
 import { GroqServiceSetup } from '../vendors/groq/GroqServiceSetup';
@@ -17,11 +20,12 @@ import { LMStudioServiceSetup } from '../vendors/lmstudio/LMStudioServiceSetup';
 import { LocalAIServiceSetup } from '../vendors/localai/LocalAIServiceSetup';
 import { MistralServiceSetup } from '../vendors/mistral/MistralServiceSetup';
 import { MoonshotServiceSetup } from '../vendors/moonshot/MoonshotServiceSetup';
+import { NvidiaNIMServiceSetup } from '../vendors/nvidianim/NvidiaNIMServiceSetup';
 import { OllamaServiceSetup } from '../vendors/ollama/OllamaServiceSetup';
 import { OpenAIServiceSetup } from '../vendors/openai/OpenAIServiceSetup';
-import { OpenPipeServiceSetup } from '../vendors/openpipe/OpenPipeServiceSetup';
 import { OpenRouterServiceSetup } from '../vendors/openrouter/OpenRouterServiceSetup';
 import { PerplexityServiceSetup } from '../vendors/perplexity/PerplexityServiceSetup';
+import { SakanaAIServiceSetup } from '../vendors/sakanaai/SakanaAIServiceSetup';
 import { TogetherAIServiceSetup } from '../vendors/togetherai/TogetherAIServiceSetup';
 import { XAIServiceSetup } from '../vendors/xai/XAIServiceSetup';
 import { ZAIServiceSetup } from '~/modules/llms/vendors/zai/ZAIServiceSetup';
@@ -37,6 +41,8 @@ const vendorSetupComponents: Record<ModelVendorId, React.ComponentType<{ service
   anthropic: AnthropicServiceSetup,
   azure: AzureServiceSetup,
   bedrock: BedrockServiceSetup,
+  cerebras: CerebrasServiceSetup,
+  cohere: CohereServiceSetup,
   deepseek: DeepseekAIServiceSetup,
   googleai: GeminiServiceSetup,
   groq: GroqServiceSetup,
@@ -44,16 +50,47 @@ const vendorSetupComponents: Record<ModelVendorId, React.ComponentType<{ service
   localai: LocalAIServiceSetup,
   mistral: MistralServiceSetup,
   moonshot: MoonshotServiceSetup,
+  nvidianim: NvidiaNIMServiceSetup,
   ollama: OllamaServiceSetup,
   openai: OpenAIServiceSetup,
-  openpipe: OpenPipeServiceSetup,
   openrouter: OpenRouterServiceSetup,
   perplexity: PerplexityServiceSetup,
+  sakanaai: SakanaAIServiceSetup,
   togetherai: TogetherAIServiceSetup,
   xai: XAIServiceSetup,
   zai: ZAIServiceSetup,
 } as const;
 
+
+/**
+ * Vendor -> big-agi.com/docs setup page. Written out because five ids differ from their slug
+ * (googleai, moonshot, nvidianim, sakanaai, togetherai); Record<ModelVendorId, ...> is exhaustive,
+ * so a new vendor cannot be registered without a docs slug (build-checked via DocPageSlug).
+ */
+export const VENDOR_DOCS: Record<ModelVendorId, DocPageSlug> = {
+  alibaba: 'connect-alibaba',
+  anthropic: 'connect-anthropic',
+  azure: 'connect-azure',
+  bedrock: 'connect-bedrock',
+  cerebras: 'connect-cerebras',
+  cohere: 'connect-cohere',
+  deepseek: 'connect-deepseek',
+  googleai: 'connect-gemini',
+  groq: 'connect-groq',
+  lmstudio: 'connect-lmstudio',
+  localai: 'connect-localai',
+  mistral: 'connect-mistral',
+  moonshot: 'connect-moonshot-ai',
+  nvidianim: 'connect-nvidia-nim',
+  ollama: 'connect-ollama',
+  openai: 'connect-openai',
+  openrouter: 'connect-openrouter',
+  perplexity: 'connect-perplexity',
+  sakanaai: 'connect-sakana',
+  togetherai: 'connect-together',
+  xai: 'connect-xai',
+  zai: 'connect-zai',
+} as const;
 
 export function LLMVendorSetup(props: { service: DModelsService }) {
   const vendor = findModelVendor(props.service.vId);

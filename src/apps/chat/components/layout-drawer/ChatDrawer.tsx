@@ -32,6 +32,7 @@ import { themeScalingMap, themeZIndexOverMobileDrawer } from '~/common/app.theme
 import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
 import { ChatDrawerItemMemo, FolderChangeRequest } from './ChatDrawerItem';
+import { ChatDrawerStorageWarning } from './ChatDrawerStorageWarning';
 import { ChatFolderList } from './folders/ChatFolderList';
 import { ChatNavGrouping, ChatSearchDepth, ChatSearchSorting, isDrawerSearching, useChatDrawerRenderItems } from './useChatDrawerRenderItems';
 import { ClearFolderText } from '../layout-bar/useFolderDropdown';
@@ -67,7 +68,6 @@ function ChatDrawer(props: {
   activeFolderId: string | null,
   chatPanesConversationIds: DConversationId[],
   disableNewButton: boolean,
-  focusedChatBeamOpen: boolean,
   onConversationActivate: (conversationId: DConversationId) => void,
   onConversationBranch: (conversationId: DConversationId, messageId: string | null, addSplitPane: boolean) => void,
   onConversationNew: (forceNoRecycle: boolean, isIncognito: boolean) => void,
@@ -145,7 +145,8 @@ function ChatDrawer(props: {
   }, [onConversationsDelete]);
 
   const handleConversationsExport = React.useCallback(() => {
-    props.activeConversationId && onConversationsExportDialog(props.activeConversationId, true);
+    // null conversationId is fine: the dialog disables the single-chat buttons and still offers the all-chats/flash backups
+    onConversationsExportDialog(props.activeConversationId, true);
   }, [onConversationsExportDialog, props.activeConversationId]);
 
 
@@ -474,6 +475,9 @@ function ChatDrawer(props: {
         )}
       </Box>
 
+      {/* Browser-storage disclaimer (issue #672) - dismissable, persisted to the app-chat store */}
+      <ChatDrawerStorageWarning />
+
       <ListDivider sx={{ my: 0 }} />
 
       {/* Bottom commands */}
@@ -486,7 +490,10 @@ function ChatDrawer(props: {
           {/*<OpenAIIcon sx={{  ml: 'auto' }} />*/}
         </ListItemButton>
 
-        <ListItemButton disabled={filteredChatsAreEmpty || props.focusedChatBeamOpen} onClick={handleConversationsExport} sx={{ flex: 1 }}>
+        {/* Always enabled: this is also the only route to 'Backup All Chats' / 'Export All', which must stay reachable (e.g. with Beam open, or zero chats).
+          - former gate (d8c78b1a004, 'Export: disable when beam open, as it's not exported for now'), kept for the record:
+            disabled={filteredChatsAreEmpty || props.focusedChatBeamOpen} */}
+        <ListItemButton onClick={handleConversationsExport} sx={{ flex: 1 }}>
           <ListItemDecorator>
             <FileUploadOutlinedIcon />
           </ListItemDecorator>
